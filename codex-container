@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+
+if [[ $# -lt 1 ]]; then
+  echo "Usage: $0 <project-directory>"
+  exit 1
+fi
+
+PROJECT="$(realpath "$1")"
+
+if [[ ! -e "$PROJECT" ]]; then
+  echo "Project path does not exist: $PROJECT"
+  exit 1
+fi
+
+if [[ ! -d "$PROJECT" ]]; then
+  echo "Project path is not a directory: $PROJECT"
+  exit 1
+fi
+
+if [[ "$PROJECT" == "/" ]]; then
+  echo "Refusing to mount /"
+  exit 1
+fi
+
+DOCKERFILE="$SCRIPT_DIR/Dockerfile"
+
+if [[ ! -f "$DOCKERFILE" ]]; then
+  echo "Dockerfile not found: $DOCKERFILE"
+  exit 1
+fi
+
+UID_HOST="$(id -u)"
+GID_HOST="$(id -g)"
+
+PROJECT_NAME="$(basename "$PROJECT")"
+PROJECT_HASH="$(echo -n "$PROJECT" | sha1sum | cut -c1-8)"
+
+IMAGE="codex-dev:uid-${UID_HOST}-gid-${GID_HOST}"
+CONTAINER_NAME="codex-${PROJECT_NAME}-${PROJECT_HASH}"
+CODEX_HOME="$HOME/.codex-container"
+WORKDIR_IN_CONTAINER="/work/${PROJECT_NAME}"
+
+TMUX_CONF="$HOME/.tmux.conf"
+TMUX_CONF_MOUNT=()
+
+if [[ -f "$TMUX_CONF" ]]; then
+  TMUX_CONF_MOUNT=(-v "$TMUX_CONF:/home/dev/.tmux.conf:ro")
+fi
+
+if [[ ! -d "$CODEX_HOME" ]]; then
+  echo "Creating Codex config directory: $CODEX_HOME"
+  mkdir -p "$CODEX_HOME"
+fi
+
+GITCONFIG="$HOME/.gitconfig"
+GITCONFIG_MOUNT=()
+
+if [[ -f "$GITCONFIG" ]]; then
+  GITCONFIG_MOUNT=(-v "$GITCONFIG:/home/dev/.gitconfig:ro")
+fi
+
+echo "Codex container config:"
+echo "  uid:        $UID_HOST"
+echo "  gid:        $GID_HOST"
+echo "  project:    $PROJECT"
+echo "  workdir:    $WORKDIR_IN_CONTAINER"
+echo "  codex home: $CODEX_HOME"
+echo "  image:      $IMAGE"
+echo "  container:  $CONTAINER_NAME"
+if [[ -f "$TMUX_CONF" ]]; then
+  echo "  tmux conf:  $TMUX_CONF"
+else
+  echo "  tmux conf:  not found"
+fi
+if [[ -f "$GITCONFIG" ]]; then
+  echo "  gitconfig:  $GITCONFIG"
+else
+  echo "  gitconfig:  not found"
+fi
+echo
+
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "Image not found, building: $IMAGE"
+  docker build \
+    --build-arg UID="$UID_HOST" \
+    --build-arg GID="$GID_HOST" \
+    -t "$IMAGE" \
+    "$SCRIPT_DIR"
+else
+  echo "Image found: $IMAGE"
+fi
+
+echo
+echo "Starting container: $CONTAINER_NAME"
+
+docker run --rm -it \
+  --name "$CONTAINER_NAME" \
+  --network host \
+  --cap-add=SYS_PTRACE \
+  --security-opt seccomp=unconfined \
+  -e http_proxy="${http_proxy:-}" \
+  -e https_proxy="${https_proxy:-}" \
+  -e HTTP_PROXY="${http_proxy:-}" \
+  -e HTTPS_PROXY="${https_proxy:-}" \
+  -e no_proxy="${no_proxy:-localhost,127.0.0.1,::1}" \
+  -e NO_PROXY="${no_proxy:-localhost,127.0.0.1,::1}" \
+  -e TERM="${TERM:-xterm-256color}" \
+  -e COLORTERM="${COLORTERM:-truecolor}" \
+  -e LANG="en_US.UTF-8" \
+  -e LANGUAGE="en_US:en" \
+  -e LC_ALL="en_US.UTF-8" \
+  -v "$PROJECT:$WORKDIR_IN_CONTAINER" \
+  -v "$CODEX_HOME:/home/dev/.codex" \
+  "${TMUX_CONF_MOUNT[@]}" \
+  "${GITCONFIG_MOUNT[@]}" \
+  -w "$WORKDIR_IN_CONTAINER" \
+  "$IMAGE"
