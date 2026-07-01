@@ -10,6 +10,7 @@ Each time you run:
 
 ```bash
 codex-container /path/to/project
+codex-container --help
 ```
 
 the script creates a new container. Because the container is started with:
