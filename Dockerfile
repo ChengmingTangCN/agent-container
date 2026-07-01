@@ -63,12 +63,16 @@ RUN set -eux; \
     fi; \
     groupadd -g "${GID}" "${USERNAME}"; \
     useradd -m -u "${UID}" -g "${GID}" -s /bin/bash "${USERNAME}"; \
+    install -d -o "${USERNAME}" -g "${USERNAME}" "/home/${USERNAME}/.npm-global"; \
     echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${USERNAME}"; \
     chmod 0440 "/etc/sudoers.d/${USERNAME}"
 
-RUN npm i -g @openai/codex
+ENV NPM_CONFIG_PREFIX=/home/${USERNAME}/.npm-global
+ENV PATH=/home/${USERNAME}/.npm-global/bin:${PATH}
 
 USER ${USERNAME}
+RUN npm i -g @openai/codex
+
 WORKDIR /work
 
 CMD ["bash"]

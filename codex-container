@@ -39,7 +39,7 @@ GID_HOST="$(id -g)"
 PROJECT_NAME="$(basename "$PROJECT")"
 PROJECT_HASH="$(echo -n "$PROJECT" | sha1sum | cut -c1-8)"
 
-IMAGE="codex-dev:uid-${UID_HOST}-gid-${GID_HOST}"
+IMAGE="codex-dev:npm-local-uid-${UID_HOST}-gid-${GID_HOST}"
 CONTAINER_NAME="codex-${PROJECT_NAME}-${PROJECT_HASH}"
 CODEX_HOME="$HOME/.codex-container"
 WORKDIR_IN_CONTAINER="/work/${PROJECT_NAME}"

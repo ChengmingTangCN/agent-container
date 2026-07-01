@@ -27,7 +27,7 @@ The persistent data is kept on the host:
 ```text
 project files -> host project directory
 Codex config  -> ~/.codex-container
-Docker image  -> codex-dev:uid-<uid>-gid-<gid>
+Docker image  -> codex-dev:npm-local-uid-<uid>-gid-<gid>
 ```
 
 The container itself does not need to persist.
@@ -57,7 +57,7 @@ The `dev` user inside the container uses the same UID/GID as the host user. This
 Example image name:
 
 ```text
-codex-dev:uid-1000-gid-1000
+codex-dev:npm-local-uid-1000-gid-1000
 ```
 
 The container name is tied to the project path so that one user can run Codex containers for multiple projects at the same time.
@@ -94,6 +94,8 @@ lifetime  -> temporary, deleted after exit
 - Runs as normal user `dev`
 - `dev` has passwordless sudo
 - `dev` UID/GID matches the host user
+- Installs npm global packages under `/home/dev/.npm-global`
+- Installs Codex CLI as `dev`, so Codex can update its own package without sudo
 - Project directory is mounted to `/work/<project-name>`
 - Codex config is persisted in `~/.codex-container`
 - Reuses host network with `--network host`
@@ -153,6 +155,14 @@ Inside the container:
 ```bash
 codex
 ```
+
+Codex is installed under the `dev` user's npm prefix:
+
+```text
+/home/dev/.npm-global
+```
+
+This keeps Codex writable by `dev` instead of placing it in a root-owned global npm directory.
 
 Exit the container:
 
