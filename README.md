@@ -1,16 +1,15 @@
 # codex-container
 
-Run Codex CLI inside a temporary Docker container.
+Run Codex CLI inside a Docker container.
 
 ## Core idea
 
 This setup treats Docker containers as disposable runtime environments.
 
-Each time you run:
+By default, each time you run:
 
 ```bash
 codex-container /path/to/project
-codex-container --help
 ```
 
 the script creates a new container. Because the container is started with:
@@ -22,6 +21,14 @@ the script creates a new container. Because the container is started with:
 the container is automatically deleted after you exit it.
 
 This is intentional.
+
+If you want to keep the container after exit, run:
+
+```bash
+codex-container --persistent /path/to/project
+```
+
+In persistent mode, the container is reused on the next run for the same project path.
 
 The persistent data is kept on the host:
 
@@ -89,6 +96,7 @@ lifetime  -> temporary, deleted after exit
 - Runs Codex CLI inside Docker
 - Creates a temporary container for each run
 - Automatically removes the container after exit
+- Can keep and reuse a project container with `--persistent`
 - Reuses the Docker image after the first build
 - Keeps project data on the host
 - Keeps Codex config on the host
@@ -143,12 +151,14 @@ codex-container ~/dev/myproj
 
 ```bash
 codex-container /path/to/project
+codex-container --persistent /path/to/project
 ```
 
 Example:
 
 ```bash
 codex-container ~/dev/myproj
+codex-container --persistent ~/dev/myproj
 ```
 
 Inside the container:

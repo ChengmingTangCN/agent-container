@@ -5,25 +5,64 @@ SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 
 usage() {
-  echo "Usage: $(basename "$0") <project-directory>"
+  echo "Usage: $(basename "$0") [options] <project-directory>"
   echo
-  echo "Run Codex CLI inside a temporary Docker container."
+  echo "Run Codex CLI inside a Docker container."
   echo
   echo "Options:"
+  echo "  --persistent  Keep and reuse the container after exit"
   echo "  -h, --help    Show this help message"
 }
 
-if [[ $# -eq 1 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
-  usage
-  exit 0
-fi
+PERSISTENT=0
+PROJECT_ARG=""
 
-if [[ $# -lt 1 ]]; then
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --persistent)
+      PERSISTENT=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1"
+      usage
+      exit 1
+      ;;
+    *)
+      if [[ -n "$PROJECT_ARG" ]]; then
+        echo "Unexpected argument: $1"
+        usage
+        exit 1
+      fi
+      PROJECT_ARG="$1"
+      shift
+      ;;
+  esac
+done
+
+for ARG in "$@"; do
+  if [[ -n "$PROJECT_ARG" ]]; then
+    echo "Unexpected argument: $ARG"
+    usage
+    exit 1
+  fi
+  PROJECT_ARG="$ARG"
+done
+
+if [[ -z "$PROJECT_ARG" ]]; then
   usage
   exit 1
 fi
 
-PROJECT="$(realpath "$1")"
+PROJECT="$(realpath "$PROJECT_ARG")"
 
 if [[ ! -e "$PROJECT" ]]; then
   echo "Project path does not exist: $PROJECT"
@@ -57,6 +96,11 @@ IMAGE="codex-dev:npm-local-uid-${UID_HOST}-gid-${GID_HOST}"
 CONTAINER_NAME="codex-${PROJECT_NAME}-${PROJECT_HASH}"
 CODEX_HOME="$HOME/.codex-container"
 WORKDIR_IN_CONTAINER="/work/${PROJECT_NAME}"
+LIFETIME="temporary"
+
+if [[ "$PERSISTENT" -eq 1 ]]; then
+  LIFETIME="persistent"
+fi
 
 TMUX_CONF="$HOME/.tmux.conf"
 TMUX_CONF_MOUNT=()
@@ -85,6 +129,7 @@ echo "  workdir:    $WORKDIR_IN_CONTAINER"
 echo "  codex home: $CODEX_HOME"
 echo "  image:      $IMAGE"
 echo "  container:  $CONTAINER_NAME"
+echo "  lifetime:   $LIFETIME"
 if [[ -f "$TMUX_CONF" ]]; then
   echo "  tmux conf:  $TMUX_CONF"
 else
@@ -96,6 +141,18 @@ else
   echo "  gitconfig:  not found"
 fi
 echo
+
+if [[ "$PERSISTENT" -eq 1 ]] && docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+  echo "Persistent container found: $CONTAINER_NAME"
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME")" == "true" ]]; then
+    echo "Attaching to running container: $CONTAINER_NAME"
+    docker attach "$CONTAINER_NAME"
+  else
+    echo "Starting persistent container: $CONTAINER_NAME"
+    docker start -ai "$CONTAINER_NAME"
+  fi
+  exit $?
+fi
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   echo "Image not found, building: $IMAGE"
@@ -109,9 +166,15 @@ else
 fi
 
 echo
-echo "Starting container: $CONTAINER_NAME"
+echo "Starting $LIFETIME container: $CONTAINER_NAME"
 
-docker run --rm -it \
+RUN_REMOVE=(--rm)
+
+if [[ "$PERSISTENT" -eq 1 ]]; then
+  RUN_REMOVE=()
+fi
+
+docker run "${RUN_REMOVE[@]}" -it \
   --name "$CONTAINER_NAME" \
   --network host \
   --cap-add=SYS_PTRACE \
