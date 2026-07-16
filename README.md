@@ -35,7 +35,7 @@ The persistent data is kept on the host:
 ```text
 project files -> host project directory
 Codex config  -> ~/.codex-container
-Docker image  -> codex-dev:npm-local-uid-<uid>-gid-<gid>
+Docker image  -> codex-dev:npm-local-<dockerfile-hash>-uid-<uid>-gid-<gid>
 ```
 
 The container itself does not need to persist.
@@ -55,17 +55,18 @@ run again when needed
 
 This setup is designed around two rules:
 
-1. The Docker image is tied to the host user's UID/GID.
+1. The Docker image is tied to the Dockerfile and the host user's UID/GID.
 2. The Docker container name is tied to the project path.
 
 The image is tied to UID/GID because the container runs as a normal user named `dev`, not as `root`.
 
 The `dev` user inside the container uses the same UID/GID as the host user. This allows the container to modify mounted project files without creating root-owned files on the host.
 
-Example image name:
+The Dockerfile hash ensures that an updated Dockerfile automatically produces a
+new image instead of silently reusing an outdated one. Example image name:
 
 ```text
-codex-dev:npm-local-uid-1000-gid-1000
+codex-dev:npm-local-a1b2c3d4e5f6-uid-1000-gid-1000
 ```
 
 The container name is tied to the project path so that one user can run Codex containers for multiple projects at the same time.
@@ -85,7 +86,7 @@ The project is mounted inside the container under `/work/<project-name>`:
 Summary:
 
 ```text
-image     -> tied to UID/GID
+image     -> tied to Dockerfile and UID/GID
 container -> tied to project path
 workdir   -> /work/<project-name>
 lifetime  -> temporary, deleted after exit
@@ -97,6 +98,7 @@ lifetime  -> temporary, deleted after exit
 - Creates a temporary container for each run
 - Automatically removes the container after exit
 - Can keep and reuse a project container with `--persistent`
+- Can force a clean image rebuild with `--rebuild`
 - Reuses the Docker image after the first build
 - Keeps project data on the host
 - Keeps Codex config on the host
@@ -109,7 +111,7 @@ lifetime  -> temporary, deleted after exit
 - Codex config is persisted in `~/.codex-container`
 - Reuses host network with `--network host`
 - Reuses host proxy environment variables
-- Automatically builds the image if it does not exist
+- Automatically builds a new image when the Dockerfile changes
 - Refuses to mount `/`
 - Allows multiple project containers to run at the same time
 
@@ -152,6 +154,7 @@ codex-container ~/dev/myproj
 ```bash
 codex-container /path/to/project
 codex-container --persistent /path/to/project
+codex-container --rebuild /path/to/project
 ```
 
 Example:
@@ -159,6 +162,7 @@ Example:
 ```bash
 codex-container ~/dev/myproj
 codex-container --persistent ~/dev/myproj
+codex-container --rebuild ~/dev/myproj
 ```
 
 Inside the container:
@@ -185,7 +189,8 @@ After exit, the container is deleted automatically. Your project files and Codex
 
 ## Proxy
 
-The script passes these variables into the container:
+The script accepts either uppercase or lowercase proxy variables and passes both
+forms into the build and the container:
 
 ```text
 http_proxy
@@ -204,6 +209,23 @@ export https_proxy=http://127.0.0.1:7890
 
 codex-container ~/dev/myproj
 ```
+
+Uppercase variables work as well:
+
+```bash
+export HTTP_PROXY=http://127.0.0.1:7890
+export HTTPS_PROXY=http://127.0.0.1:7890
+export NO_PROXY=localhost,127.0.0.1,::1
+```
+
+Proxy values are supplied as Docker's predefined build arguments. They are not
+written to npm configuration files or printed by the Dockerfile. When no proxy
+environment variables are set, the script leaves Docker's own build proxy
+configuration untouched.
+
+When `--rebuild` is used, the image is built without cache. If a container with
+the same project name exists, it is removed first so persistent containers can
+be recreated from the new image.
 
 Because the container uses `--network host`, `127.0.0.1:7890` inside the container refers to the host proxy service on Linux.
 

@@ -11,16 +11,22 @@ usage() {
   echo
   echo "Options:"
   echo "  --persistent  Keep and reuse the container after exit"
+  echo "  --rebuild     Rebuild the image without cache"
   echo "  -h, --help    Show this help message"
 }
 
 PERSISTENT=0
+REBUILD=0
 PROJECT_ARG=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --persistent)
       PERSISTENT=1
+      shift
+      ;;
+    --rebuild)
+      REBUILD=1
       shift
       ;;
     -h|--help)
@@ -91,12 +97,18 @@ GID_HOST="$(id -g)"
 
 PROJECT_NAME="$(basename "$PROJECT")"
 PROJECT_HASH="$(echo -n "$PROJECT" | sha1sum | cut -c1-8)"
+IMAGE_REVISION="$(sha256sum "$DOCKERFILE" | cut -c1-12)"
 
-IMAGE="codex-dev:npm-local-uid-${UID_HOST}-gid-${GID_HOST}"
+IMAGE="codex-dev:npm-local-${IMAGE_REVISION}-uid-${UID_HOST}-gid-${GID_HOST}"
 CONTAINER_NAME="codex-${PROJECT_NAME}-${PROJECT_HASH}"
 CODEX_HOME="$HOME/.codex-container"
 WORKDIR_IN_CONTAINER="/work/${PROJECT_NAME}"
 LIFETIME="temporary"
+
+HTTP_PROXY_VALUE="${http_proxy:-${HTTP_PROXY:-}}"
+HTTPS_PROXY_VALUE="${https_proxy:-${HTTPS_PROXY:-}}"
+NO_PROXY_SOURCE="${no_proxy:-${NO_PROXY:-}}"
+NO_PROXY_VALUE="${NO_PROXY_SOURCE:-localhost,127.0.0.1,::1}"
 
 if [[ "$PERSISTENT" -eq 1 ]]; then
   LIFETIME="persistent"
@@ -142,8 +154,18 @@ else
 fi
 echo
 
+if [[ "$REBUILD" -eq 1 ]] && docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+  echo "Removing existing container for rebuild: $CONTAINER_NAME"
+  docker rm -f "$CONTAINER_NAME" >/dev/null
+fi
+
 if [[ "$PERSISTENT" -eq 1 ]] && docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
   echo "Persistent container found: $CONTAINER_NAME"
+  CURRENT_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER_NAME")"
+  if [[ "$CURRENT_IMAGE" != "$IMAGE" ]]; then
+    echo "Warning: persistent container uses an outdated image: $CURRENT_IMAGE"
+    echo "Run again with --rebuild to recreate it from: $IMAGE"
+  fi
   if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME")" == "true" ]]; then
     echo "Attaching to running container: $CONTAINER_NAME"
     docker attach "$CONTAINER_NAME"
@@ -154,9 +176,34 @@ if [[ "$PERSISTENT" -eq 1 ]] && docker container inspect "$CONTAINER_NAME" >/dev
   exit $?
 fi
 
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "Image not found, building: $IMAGE"
-  docker build \
+BUILD_OPTIONS=()
+BUILD_PROXY_ARGS=()
+
+if [[ "$REBUILD" -eq 1 ]]; then
+  BUILD_OPTIONS+=(--no-cache)
+fi
+
+if [[ -n "$HTTP_PROXY_VALUE" ]]; then
+  BUILD_PROXY_ARGS+=(--build-arg "HTTP_PROXY=$HTTP_PROXY_VALUE")
+fi
+
+if [[ -n "$HTTPS_PROXY_VALUE" ]]; then
+  BUILD_PROXY_ARGS+=(--build-arg "HTTPS_PROXY=$HTTPS_PROXY_VALUE")
+fi
+
+if [[ -n "$NO_PROXY_SOURCE" ]]; then
+  BUILD_PROXY_ARGS+=(--build-arg "NO_PROXY=$NO_PROXY_SOURCE")
+fi
+
+if [[ "$REBUILD" -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  if [[ "$REBUILD" -eq 1 ]]; then
+    echo "Rebuilding image: $IMAGE"
+  else
+    echo "Image not found, building: $IMAGE"
+  fi
+  docker build "${BUILD_OPTIONS[@]}" \
+    --network host \
+    "${BUILD_PROXY_ARGS[@]}" \
     --build-arg UID="$UID_HOST" \
     --build-arg GID="$GID_HOST" \
     -t "$IMAGE" \
@@ -179,12 +226,12 @@ docker run "${RUN_REMOVE[@]}" -it \
   --network host \
   --cap-add=SYS_PTRACE \
   --security-opt seccomp=unconfined \
-  -e http_proxy="${http_proxy:-}" \
-  -e https_proxy="${https_proxy:-}" \
-  -e HTTP_PROXY="${http_proxy:-}" \
-  -e HTTPS_PROXY="${https_proxy:-}" \
-  -e no_proxy="${no_proxy:-localhost,127.0.0.1,::1}" \
-  -e NO_PROXY="${no_proxy:-localhost,127.0.0.1,::1}" \
+  -e http_proxy="$HTTP_PROXY_VALUE" \
+  -e https_proxy="$HTTPS_PROXY_VALUE" \
+  -e HTTP_PROXY="$HTTP_PROXY_VALUE" \
+  -e HTTPS_PROXY="$HTTPS_PROXY_VALUE" \
+  -e no_proxy="$NO_PROXY_VALUE" \
+  -e NO_PROXY="$NO_PROXY_VALUE" \
   -e TERM="${TERM:-xterm-256color}" \
   -e COLORTERM="${COLORTERM:-truecolor}" \
   -e LANG="en_US.UTF-8" \
