@@ -137,6 +137,20 @@ for OPENCODE_DIR in "$OPENCODE_CONFIG_DIR" "$OPENCODE_DATA_DIR" "$OPENCODE_STATE
   fi
 done
 
+CODEX_AGENTS="$CODEX_HOME/AGENTS.md"
+OPENCODE_AGENTS="$OPENCODE_CONFIG_DIR/AGENTS.md"
+
+if [[ -f "$CODEX_AGENTS" ]]; then
+  if [[ -L "$OPENCODE_AGENTS" ]] && [[ ! -e "$OPENCODE_AGENTS" ]]; then
+    echo "Replacing broken AGENTS.md symlink: $OPENCODE_AGENTS"
+    rm "$OPENCODE_AGENTS"
+  fi
+  if [[ ! -e "$OPENCODE_AGENTS" ]]; then
+    echo "Linking shared AGENTS.md into opencode config: $OPENCODE_AGENTS"
+    ln -s /home/dev/.codex/AGENTS.md "$OPENCODE_AGENTS"
+  fi
+fi
+
 GITCONFIG="$HOME/.gitconfig"
 GITCONFIG_MOUNT=()
 
@@ -171,6 +185,11 @@ if [[ -f "$GITCONFIG" ]]; then
   echo "  gitconfig:  $GITCONFIG"
 else
   echo "  gitconfig:  not found"
+fi
+if [[ -f "$CODEX_AGENTS" ]]; then
+  echo "  shared AGENTS.md (codex+opencode): $CODEX_AGENTS"
+else
+  echo "  shared AGENTS.md: not found"
 fi
 echo
 
