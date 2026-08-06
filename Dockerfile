@@ -72,7 +72,7 @@ ENV NPM_CONFIG_PREFIX=/home/${USERNAME}/.npm-global
 ENV PATH=/home/${USERNAME}/.npm-global/bin:${PATH}
 
 USER ${USERNAME}
-RUN npm i -g @openai/codex
+RUN npm i -g @openai/codex opencode-ai@latest
 
 WORKDIR /work
 

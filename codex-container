@@ -126,6 +126,16 @@ if [[ ! -d "$CODEX_HOME" ]]; then
   mkdir -p "$CODEX_HOME"
 fi
 
+OPENCODE_CONFIG_DIR="$CODEX_HOME/opencode/config"
+OPENCODE_DATA_DIR="$CODEX_HOME/opencode/data"
+
+for OPENCODE_DIR in "$OPENCODE_CONFIG_DIR" "$OPENCODE_DATA_DIR"; do
+  if [[ ! -d "$OPENCODE_DIR" ]]; then
+    echo "Creating OpenCode config directory: $OPENCODE_DIR"
+    mkdir -p "$OPENCODE_DIR"
+  fi
+done
+
 GITCONFIG="$HOME/.gitconfig"
 GITCONFIG_MOUNT=()
 
@@ -133,12 +143,19 @@ if [[ -f "$GITCONFIG" ]]; then
   GITCONFIG_MOUNT=(-v "$GITCONFIG:/home/dev/.gitconfig:ro")
 fi
 
+OPENCODE_MOUNTS=(
+  -v "$OPENCODE_CONFIG_DIR:/home/dev/.config/opencode"
+  -v "$OPENCODE_DATA_DIR:/home/dev/.local/share/opencode"
+)
+
 echo "Codex container config:"
 echo "  uid:        $UID_HOST"
 echo "  gid:        $GID_HOST"
 echo "  project:    $PROJECT"
 echo "  workdir:    $WORKDIR_IN_CONTAINER"
 echo "  codex home: $CODEX_HOME"
+echo "  opencode config: $OPENCODE_CONFIG_DIR"
+echo "  opencode data:   $OPENCODE_DATA_DIR"
 echo "  image:      $IMAGE"
 echo "  container:  $CONTAINER_NAME"
 echo "  lifetime:   $LIFETIME"
@@ -239,6 +256,7 @@ docker run "${RUN_REMOVE[@]}" -it \
   -e LC_ALL="en_US.UTF-8" \
   -v "$PROJECT:$WORKDIR_IN_CONTAINER" \
   -v "$CODEX_HOME:/home/dev/.codex" \
+  "${OPENCODE_MOUNTS[@]}" \
   "${TMUX_CONF_MOUNT[@]}" \
   "${GITCONFIG_MOUNT[@]}" \
   -w "$WORKDIR_IN_CONTAINER" \

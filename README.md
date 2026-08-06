@@ -1,6 +1,6 @@
 # codex-container
 
-Run Codex CLI inside a Docker container.
+Run Codex CLI and OpenCode inside a Docker container.
 
 ## Core idea
 
@@ -33,9 +33,11 @@ In persistent mode, the container is reused on the next run for the same project
 The persistent data is kept on the host:
 
 ```text
-project files -> host project directory
-Codex config  -> ~/.codex-container
-Docker image  -> codex-dev:npm-local-<dockerfile-hash>-uid-<uid>-gid-<gid>
+project files        -> host project directory
+Codex config         -> ~/.codex-container
+OpenCode config      -> ~/.codex-container/opencode/config
+OpenCode data        -> ~/.codex-container/opencode/data
+Docker image         -> codex-dev:npm-local-<dockerfile-hash>-uid-<uid>-gid-<gid>
 ```
 
 The container itself does not need to persist.
@@ -94,21 +96,21 @@ lifetime  -> temporary, deleted after exit
 
 ## Features
 
-- Runs Codex CLI inside Docker
+- Runs Codex CLI and OpenCode inside Docker
 - Creates a temporary container for each run
 - Automatically removes the container after exit
 - Can keep and reuse a project container with `--persistent`
 - Can force a clean image rebuild with `--rebuild`
 - Reuses the Docker image after the first build
 - Keeps project data on the host
-- Keeps Codex config on the host
+- Keeps Codex and OpenCode config on the host
 - Runs as normal user `dev`
 - `dev` has passwordless sudo
 - `dev` UID/GID matches the host user
 - Installs npm global packages under `/home/dev/.npm-global`
-- Installs Codex CLI as `dev`, so Codex can update its own package without sudo
+- Installs Codex CLI and OpenCode as `dev`, so they can update their own packages without sudo
 - Project directory is mounted to `/work/<project-name>`
-- Codex config is persisted in `~/.codex-container`
+- Codex config and OpenCode config/data are persisted in `~/.codex-container`
 - Reuses host network with `--network host`
 - Reuses host proxy environment variables
 - Automatically builds a new image when the Dockerfile changes
@@ -169,9 +171,10 @@ Inside the container:
 
 ```bash
 codex
+opencode
 ```
 
-Codex is installed under the `dev` user's npm prefix:
+Codex and OpenCode are installed under the `dev` user's npm prefix:
 
 ```text
 /home/dev/.npm-global
@@ -185,7 +188,7 @@ Exit the container:
 exit
 ```
 
-After exit, the container is deleted automatically. Your project files and Codex config remain on the host.
+After exit, the container is deleted automatically. Your project files, Codex config, and OpenCode config remain on the host.
 
 ## Proxy
 
@@ -244,6 +247,25 @@ It is mounted into the container as:
 ```
 
 If the directory does not exist, the script creates it automatically.
+
+## OpenCode config
+
+OpenCode config and data are stored on the host at:
+
+```text
+~/.codex-container/opencode/config
+~/.codex-container/opencode/data
+```
+
+They are mounted into the container at OpenCode's standard paths:
+
+```text
+/home/dev/.config/opencode
+/home/dev/.local/share/opencode
+```
+
+Credentials from `opencode auth login` are kept in the data directory, so they
+survive container rebuilds. The script creates the directories automatically.
 
 ## Permission check
 
