@@ -232,6 +232,28 @@ be recreated from the new image.
 
 Because the container uses `--network host`, `127.0.0.1:7890` inside the container refers to the host proxy service on Linux.
 
+## Build performance
+
+The Dockerfile uses a BuildKit cache mount so apt package downloads survive
+between builds:
+
+```text
+apt package archives and lists -> host build cache
+```
+
+After the first build, a rebuild only re-downloads what actually changed.
+Even `--rebuild`, which disables Docker's normal layer cache, can reuse the
+downloaded packages from this mount.
+
+Notes:
+
+- `--rebuild` passes `--no-cache` to Docker, so the image is built from
+  scratch. Only use it when you really need a clean build.
+- The build cache lives in BuildKit's storage on the host. Inspect it with
+  `docker buildx du` and free space with `docker buildx prune`.
+- The cache is local to the machine that built the image. A new machine starts
+  with an empty cache and needs one full download pass.
+
 ## Codex config
 
 Codex config is stored on the host at:

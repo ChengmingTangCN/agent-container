@@ -1,9 +1,14 @@
+# syntax=docker/dockerfile:1
+
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN --mount=type=cache,target=/var/cache/apt \
-    apt-get update && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+ && apt-get update \
+ && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
     sudo \
     curl \
     wget \
@@ -36,8 +41,7 @@ RUN --mount=type=cache,target=/var/cache/apt \
     vim \
     less \
     bash-completion \
- && locale-gen en_US.UTF-8 zh_CN.UTF-8 \
- && rm -rf /var/lib/apt/lists/*
+ && locale-gen en_US.UTF-8 zh_CN.UTF-8
 
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
