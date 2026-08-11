@@ -4,9 +4,16 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+ARG TARGETARCH
+
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    rm -f /etc/apt/apt.conf.d/docker-clean \
+    if [ "${TARGETARCH}" = "arm64" ]; then \
+        sed -i 's|http://ports.ubuntu.com/ubuntu-ports|http://mirrors.ustc.edu.cn/ubuntu-ports|g' /etc/apt/sources.list.d/ubuntu.sources; \
+    elif [ "${TARGETARCH}" = "amd64" ]; then \
+        sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
+    fi \
+ && rm -f /etc/apt/apt.conf.d/docker-clean \
  && apt-get update \
  && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
     sudo \
