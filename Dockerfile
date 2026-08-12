@@ -83,8 +83,13 @@ ENV PATH=/home/${USERNAME}/.node/bin:/home/${USERNAME}/.npm-global/bin:${PATH}
 USER ${USERNAME}
 RUN set -eux; \
     NODE_ARCH="$([ "${TARGETARCH}" = "arm64" ] && echo arm64 || echo x64)"; \
-    NODE_VERSION="$(curl -fsSL https://nodejs.org/dist/latest-v24.x/ | grep -oE 'node-v24\.[0-9]+\.[0-9]+' | sort -Vu | tail -1 | sed 's/^node-v//')"; \
-    curl -fsSL --retry 3 "https://nodejs.org/dist/node-v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" -o /tmp/node.tar.xz; \
+    NODE_VERSION="$(curl -fsSL --retry 3 --retry-all-errors https://nodejs.org/dist/latest-v24.x/ | grep -oE 'node-v24\.[0-9]+\.[0-9]+' | sort -Vu | tail -1 | sed 's/^node-v//')"; \
+    curl -fsSL --retry 5 --retry-all-errors \
+        -o /tmp/node.tar.xz \
+        "https://registry.npmmirror.com/-/binary/node/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
+    || curl -fsSL --retry 5 --retry-all-errors \
+        -o /tmp/node.tar.xz \
+        "https://nodejs.org/dist/node-v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"; \
     mkdir -p "${HOME}/.node"; \
     tar -xJf /tmp/node.tar.xz -C "${HOME}/.node" --strip-components=1; \
     rm -f /tmp/node.tar.xz; \
