@@ -137,6 +137,13 @@ for OPENCODE_DIR in "$OPENCODE_CONFIG_DIR" "$OPENCODE_DATA_DIR" "$OPENCODE_STATE
   fi
 done
 
+PI_CONFIG_DIR="$CODEX_HOME/pi"
+
+if [[ ! -d "$PI_CONFIG_DIR" ]]; then
+  echo "Creating Pi config directory: $PI_CONFIG_DIR"
+  mkdir -p "$PI_CONFIG_DIR"
+fi
+
 CODEX_AGENTS="$CODEX_HOME/AGENTS.md"
 OPENCODE_AGENTS="$OPENCODE_CONFIG_DIR/AGENTS.md"
 
@@ -164,6 +171,10 @@ OPENCODE_MOUNTS=(
   -v "$OPENCODE_STATE_DIR:/home/dev/.local/state/opencode"
 )
 
+PI_MOUNTS=(
+  -v "$PI_CONFIG_DIR:/home/dev/.pi"
+)
+
 echo "Codex container config:"
 echo "  uid:        $UID_HOST"
 echo "  gid:        $GID_HOST"
@@ -173,6 +184,7 @@ echo "  codex home: $CODEX_HOME"
 echo "  opencode config: $OPENCODE_CONFIG_DIR"
 echo "  opencode data:   $OPENCODE_DATA_DIR"
 echo "  opencode state:  $OPENCODE_STATE_DIR"
+echo "  pi config:       $PI_CONFIG_DIR"
 echo "  image:      $IMAGE"
 echo "  container:  $CONTAINER_NAME"
 echo "  lifetime:   $LIFETIME"
@@ -279,6 +291,7 @@ docker run "${RUN_REMOVE[@]}" -it \
   -v "$PROJECT:$WORKDIR_IN_CONTAINER" \
   -v "$CODEX_HOME:/home/dev/.codex" \
   "${OPENCODE_MOUNTS[@]}" \
+  "${PI_MOUNTS[@]}" \
   "${TMUX_CONF_MOUNT[@]}" \
   "${GITCONFIG_MOUNT[@]}" \
   -w "$WORKDIR_IN_CONTAINER" \

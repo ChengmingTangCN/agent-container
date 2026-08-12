@@ -37,6 +37,7 @@ project files        -> host project directory
 Codex config         -> ~/.codex-container
 OpenCode config      -> ~/.codex-container/opencode/config
 OpenCode data        -> ~/.codex-container/opencode/data
+Pi config            -> ~/.codex-container/pi
 Docker image         -> codex-dev:npm-local-<dockerfile-hash>-uid-<uid>-gid-<gid>
 ```
 
@@ -103,14 +104,14 @@ lifetime  -> temporary, deleted after exit
 - Can force a clean image rebuild with `--rebuild`
 - Reuses the Docker image after the first build
 - Keeps project data on the host
-- Keeps Codex and OpenCode config on the host
+- Keeps Codex, OpenCode, and Pi config on the host
 - Runs as normal user `dev`
 - `dev` has passwordless sudo
 - `dev` UID/GID matches the host user
 - Installs npm global packages under `/home/dev/.npm-global`
-- Installs Codex CLI and OpenCode as `dev`, so they can update their own packages without sudo
+- Installs Codex CLI, OpenCode, and Pi as `dev`, so they can update their own packages without sudo
 - Project directory is mounted to `/work/<project-name>`
-- Codex config and OpenCode config/data are persisted in `~/.codex-container`
+- Codex config and OpenCode/Pi config/data are persisted in `~/.codex-container`
 - Reuses host network with `--network host`
 - Reuses host proxy environment variables
 - Automatically builds a new image when the Dockerfile changes
@@ -172,9 +173,10 @@ Inside the container:
 ```bash
 codex
 opencode
+pi
 ```
 
-Codex and OpenCode are installed under the `dev` user's npm prefix:
+Codex, OpenCode, and Pi are installed under the `dev` user's npm prefix:
 
 ```text
 /home/dev/.npm-global
@@ -188,7 +190,7 @@ Exit the container:
 exit
 ```
 
-After exit, the container is deleted automatically. Your project files, Codex config, and OpenCode config remain on the host.
+After exit, the container is deleted automatically. Your project files, Codex config, OpenCode config, and Pi config remain on the host.
 
 ## Proxy
 
@@ -288,6 +290,23 @@ They are mounted into the container at OpenCode's standard paths:
 
 Credentials from `opencode auth login` are kept in the data directory, so they
 survive container rebuilds. The script creates the directories automatically.
+
+## Pi config
+
+Pi config is stored on the host at:
+
+```text
+~/.codex-container/pi
+```
+
+It is mounted into the container at Pi's standard path:
+
+```text
+/home/dev/.pi
+```
+
+Credentials, global settings (`~/.pi/agent/settings.json`), and trust decisions
+survive container rebuilds. The script creates the directory automatically.
 
 ## Permission check
 

@@ -83,7 +83,7 @@ ENV NPM_CONFIG_PREFIX=/home/${USERNAME}/.npm-global
 ENV PATH=/home/${USERNAME}/.npm-global/bin:${PATH}
 
 USER ${USERNAME}
-RUN npm i -g @openai/codex opencode-ai@latest
+RUN npm i -g --registry=https://registry.npmmirror.com @openai/codex opencode-ai@latest @earendil-works/pi-coding-agent
 
 WORKDIR /work
 
