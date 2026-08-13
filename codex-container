@@ -138,24 +138,35 @@ for OPENCODE_DIR in "$OPENCODE_CONFIG_DIR" "$OPENCODE_DATA_DIR" "$OPENCODE_STATE
 done
 
 PI_CONFIG_DIR="$CODEX_HOME/pi"
+PI_AGENT_DIR="$PI_CONFIG_DIR/agent"
 
 if [[ ! -d "$PI_CONFIG_DIR" ]]; then
   echo "Creating Pi config directory: $PI_CONFIG_DIR"
   mkdir -p "$PI_CONFIG_DIR"
 fi
 
+if [[ ! -d "$PI_AGENT_DIR" ]]; then
+  echo "Creating Pi agent directory: $PI_AGENT_DIR"
+  mkdir -p "$PI_AGENT_DIR"
+fi
+
 CODEX_AGENTS="$CODEX_HOME/AGENTS.md"
 OPENCODE_AGENTS="$OPENCODE_CONFIG_DIR/AGENTS.md"
+PI_AGENTS="$PI_AGENT_DIR/AGENTS.md"
 
+# Link the shared AGENTS.md into each tool's config. The symlink target is
+# the container-internal codex home, resolved via the docker bind mounts.
 if [[ -f "$CODEX_AGENTS" ]]; then
-  if [[ -L "$OPENCODE_AGENTS" ]] && [[ ! -e "$OPENCODE_AGENTS" ]]; then
-    echo "Replacing broken AGENTS.md symlink: $OPENCODE_AGENTS"
-    rm "$OPENCODE_AGENTS"
-  fi
-  if [[ ! -e "$OPENCODE_AGENTS" ]]; then
-    echo "Linking shared AGENTS.md into opencode config: $OPENCODE_AGENTS"
-    ln -s /home/dev/.codex/AGENTS.md "$OPENCODE_AGENTS"
-  fi
+  for TOOL_AGENTS in "$OPENCODE_AGENTS" "$PI_AGENTS"; do
+    if [[ -L "$TOOL_AGENTS" ]] && [[ ! -e "$TOOL_AGENTS" ]]; then
+      echo "Replacing broken AGENTS.md symlink: $TOOL_AGENTS"
+      rm "$TOOL_AGENTS"
+    fi
+    if [[ ! -e "$TOOL_AGENTS" ]]; then
+      echo "Linking shared AGENTS.md into tool config: $TOOL_AGENTS"
+      ln -s /home/dev/.codex/AGENTS.md "$TOOL_AGENTS"
+    fi
+  done
 fi
 
 GITCONFIG="$HOME/.gitconfig"
@@ -199,7 +210,7 @@ else
   echo "  gitconfig:  not found"
 fi
 if [[ -f "$CODEX_AGENTS" ]]; then
-  echo "  shared AGENTS.md (codex+opencode): $CODEX_AGENTS"
+  echo "  shared AGENTS.md (codex+opencode+pi): $CODEX_AGENTS"
 else
   echo "  shared AGENTS.md: not found"
 fi
