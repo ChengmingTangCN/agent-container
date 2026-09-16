@@ -5,305 +5,227 @@ SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 
 usage() {
-  echo "Usage: $(basename "$0") [options] <project-directory>"
-  echo
-  echo "Run Codex CLI inside a Docker container."
-  echo
-  echo "Options:"
-  echo "  --persistent  Keep and reuse the container after exit"
-  echo "  --rebuild     Rebuild the image without cache"
-  echo "  -h, --help    Show this help message"
+  cat <<USAGE
+Usage: $(basename "$0") [options] <project-directory>
+
+Start a project container locally. Use the upstream HAPI PWA for agent sessions.
+
+Options:
+  --hapi        Start a persistent HAPI Runner container in the background
+  --persistent  Keep and reuse an interactive container after exit
+  --rebuild     Rebuild the image and replace this project's container
+  -h, --help    Show this help
+USAGE
 }
 
 PERSISTENT=0
 REBUILD=0
+HAPI_RUNNER=0
 PROJECT_ARG=""
-
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --persistent)
-      PERSISTENT=1
-      shift
-      ;;
-    --rebuild)
-      REBUILD=1
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    --)
-      shift
-      break
-      ;;
-    -*)
-      echo "Unknown option: $1"
-      usage
-      exit 1
-      ;;
+    --persistent) PERSISTENT=1; shift ;;
+    --rebuild) REBUILD=1; shift ;;
+    --hapi) HAPI_RUNNER=1; PERSISTENT=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
     *)
-      if [[ -n "$PROJECT_ARG" ]]; then
-        echo "Unexpected argument: $1"
-        usage
-        exit 1
-      fi
+      [[ -z "$PROJECT_ARG" ]] || { echo "Unexpected argument: $1" >&2; exit 2; }
       PROJECT_ARG="$1"
       shift
       ;;
   esac
 done
-
 for ARG in "$@"; do
-  if [[ -n "$PROJECT_ARG" ]]; then
-    echo "Unexpected argument: $ARG"
-    usage
-    exit 1
-  fi
+  [[ -z "$PROJECT_ARG" ]] || { echo "Unexpected argument: $ARG" >&2; exit 2; }
   PROJECT_ARG="$ARG"
 done
-
-if [[ -z "$PROJECT_ARG" ]]; then
-  usage
-  exit 1
-fi
-
-PROJECT="$(realpath "$PROJECT_ARG")"
-
-if [[ ! -e "$PROJECT" ]]; then
-  echo "Project path does not exist: $PROJECT"
-  exit 1
-fi
-
-if [[ ! -d "$PROJECT" ]]; then
-  echo "Project path is not a directory: $PROJECT"
-  exit 1
-fi
-
-if [[ "$PROJECT" == "/" ]]; then
-  echo "Refusing to mount /"
-  exit 1
-fi
+[[ -n "$PROJECT_ARG" ]] || { usage >&2; exit 2; }
+[[ -d "$PROJECT_ARG" ]] || { echo "Project directory does not exist: $PROJECT_ARG" >&2; exit 1; }
+PROJECT="$(realpath -e -- "$PROJECT_ARG")"
+[[ "$PROJECT" != / ]] || { echo "Refusing to mount /" >&2; exit 1; }
 
 DOCKERFILE="$SCRIPT_DIR/Dockerfile"
-
-if [[ ! -f "$DOCKERFILE" ]]; then
-  echo "Dockerfile not found: $DOCKERFILE"
-  exit 1
-fi
-
+[[ -f "$DOCKERFILE" ]] || { echo "Dockerfile not found: $DOCKERFILE" >&2; exit 1; }
 UID_HOST="$(id -u)"
 GID_HOST="$(id -g)"
-
 PROJECT_NAME="$(basename "$PROJECT")"
-PROJECT_HASH="$(echo -n "$PROJECT" | sha1sum | cut -c1-8)"
+PROJECT_HASH="$(printf '%s' "$PROJECT" | sha1sum | cut -c1-8)"
+PROJECT_SLUG="$(printf '%s' "$PROJECT_NAME" | LC_ALL=C sed -E 's/[^A-Za-z0-9_.-]+/-/g' | cut -c1-48)"
 IMAGE_REVISION="$(sha256sum "$DOCKERFILE" | cut -c1-12)"
-
 IMAGE="codex-dev:npm-local-${IMAGE_REVISION}-uid-${UID_HOST}-gid-${GID_HOST}"
-CONTAINER_NAME="codex-${PROJECT_NAME}-${PROJECT_HASH}"
-CODEX_HOME="$HOME/.codex-container"
-WORKDIR_IN_CONTAINER="/work/${PROJECT_NAME}"
-LIFETIME="temporary"
-
-HTTP_PROXY_VALUE="${http_proxy:-${HTTP_PROXY:-}}"
-HTTPS_PROXY_VALUE="${https_proxy:-${HTTPS_PROXY:-}}"
-NO_PROXY_SOURCE="${no_proxy:-${NO_PROXY:-}}"
-NO_PROXY_VALUE="${NO_PROXY_SOURCE:-localhost,127.0.0.1,::1}"
-
-if [[ "$PERSISTENT" -eq 1 ]]; then
-  LIFETIME="persistent"
+CONTAINER_NAME="codex-${PROJECT_SLUG:-project}-${PROJECT_HASH}"
+WORKDIR_IN_CONTAINER="/work/$PROJECT_NAME"
+DATA_ROOT="$(realpath -m -- "${CODEX_CONTAINER_DATA_DIR:-$HOME/.codex-container}")"
+if [[ "$DATA_ROOT" == "$PROJECT" || "$DATA_ROOT" == "$PROJECT/"* ]]; then
+  echo "The project must not contain the shared state directory: $DATA_ROOT" >&2
+  exit 1
 fi
-
-TMUX_CONF="$HOME/.tmux.conf"
-TMUX_CONF_MOUNT=()
-
-if [[ -f "$TMUX_CONF" ]]; then
-  TMUX_CONF_MOUNT=(-v "$TMUX_CONF:/home/dev/.tmux.conf:ro")
-fi
-
-if [[ ! -d "$CODEX_HOME" ]]; then
-  echo "Creating Codex config directory: $CODEX_HOME"
-  mkdir -p "$CODEX_HOME"
-fi
-
-OPENCODE_CONFIG_DIR="$CODEX_HOME/opencode/config"
-OPENCODE_DATA_DIR="$CODEX_HOME/opencode/data"
-OPENCODE_STATE_DIR="$CODEX_HOME/opencode/state"
-
-for OPENCODE_DIR in "$OPENCODE_CONFIG_DIR" "$OPENCODE_DATA_DIR" "$OPENCODE_STATE_DIR"; do
-  if [[ ! -d "$OPENCODE_DIR" ]]; then
-    echo "Creating OpenCode config directory: $OPENCODE_DIR"
-    mkdir -p "$OPENCODE_DIR"
+# Docker's -v syntax uses ':' as a delimiter; do not interpret it as mount options.
+for MOUNT_PATH in "$PROJECT" "$DATA_ROOT" "$HOME"; do
+  if [[ "$MOUNT_PATH" == *:* || "$MOUNT_PATH" == *$'\n'* ]]; then
+    echo "Mount paths must not contain colons or newlines" >&2
+    exit 1
   fi
 done
+PROJECT_STATE_ROOT="$DATA_ROOT/projects/$PROJECT_HASH"
+PROJECT_CODEX_DIR="$PROJECT_STATE_ROOT/codex"
+PROJECT_HAPI_DIR="$PROJECT_STATE_ROOT/hapi"
+OPENCODE_CONFIG_DIR="$PROJECT_STATE_ROOT/opencode/config"
+OPENCODE_DATA_DIR="$PROJECT_STATE_ROOT/opencode/data"
+OPENCODE_STATE_DIR="$PROJECT_STATE_ROOT/opencode/state"
+PI_CONFIG_DIR="$PROJECT_STATE_ROOT/pi"
+MODE="shell"
+[[ "$HAPI_RUNNER" -eq 0 ]] || MODE="hapi"
 
-PI_CONFIG_DIR="$CODEX_HOME/pi"
-PI_AGENT_DIR="$PI_CONFIG_DIR/agent"
+clear_runner_process_state() {
+  # The previous container's PIDs cannot identify processes in a fresh start.
+  # Keep settings.json (credentials and machine identity) untouched.
+  rm -f -- "$PROJECT_HAPI_DIR/runner.state.json" "$PROJECT_HAPI_DIR/runner.state.json.lock"
+}
 
-if [[ ! -d "$PI_CONFIG_DIR" ]]; then
-  echo "Creating Pi config directory: $PI_CONFIG_DIR"
-  mkdir -p "$PI_CONFIG_DIR"
+CONTAINER_EXISTS=0
+if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+  CONTAINER_EXISTS=1
+  SCHEMA="$(docker inspect -f '{{ index .Config.Labels "codex-container.schema" }}' "$CONTAINER_NAME")"
+  OLD_PROJECT="$(docker inspect -f '{{ index .Config.Labels "codex-container.project" }}' "$CONTAINER_NAME")"
+  OLD_MODE="$(docker inspect -f '{{ index .Config.Labels "codex-container.mode" }}' "$CONTAINER_NAME")"
+  if [[ "$SCHEMA" != 3 || "$OLD_PROJECT" != "$PROJECT" ]]; then
+    echo "Existing container uses an old or unrelated layout: $CONTAINER_NAME" >&2
+    echo "Stop and remove that container locally before continuing; keep its project and state directories." >&2
+    exit 1
+  fi
+  if [[ "$OLD_MODE" != "$MODE" && "$REBUILD" -eq 0 ]]; then
+    echo "Existing container uses $OLD_MODE mode. Remove it locally before switching modes." >&2
+    exit 1
+  fi
 fi
 
-if [[ ! -d "$PI_AGENT_DIR" ]]; then
-  echo "Creating Pi agent directory: $PI_AGENT_DIR"
-  mkdir -p "$PI_AGENT_DIR"
+# Only selected reusable Codex files are seeded. Never copy another project's
+# sessions or HAPI machine identity, and never mount DATA_ROOT into a container.
+NEW_PROJECT_STATE=0
+[[ -d "$PROJECT_STATE_ROOT" ]] || NEW_PROJECT_STATE=1
+for STATE_PATH in "$DATA_ROOT" "$DATA_ROOT/projects" "$PROJECT_STATE_ROOT" \
+  "$PROJECT_CODEX_DIR" "$PROJECT_HAPI_DIR" "$OPENCODE_CONFIG_DIR" \
+  "$OPENCODE_DATA_DIR" "$OPENCODE_STATE_DIR" "$PI_CONFIG_DIR" "$PI_CONFIG_DIR/agent"; do
+  mkdir -p -- "$STATE_PATH"
+  chmod 700 "$STATE_PATH"
+done
+if [[ "$NEW_PROJECT_STATE" -eq 1 ]]; then
+  for CONFIG_NAME in auth.json config.toml AGENTS.md; do
+    for SEED_DIR in "$DATA_ROOT/seed/codex" "$DATA_ROOT"; do
+      if [[ -f "$SEED_DIR/$CONFIG_NAME" ]]; then
+        install -m 600 "$SEED_DIR/$CONFIG_NAME" "$PROJECT_CODEX_DIR/$CONFIG_NAME"
+        break
+      fi
+    done
+  done
 fi
-
-CODEX_AGENTS="$CODEX_HOME/AGENTS.md"
-OPENCODE_AGENTS="$OPENCODE_CONFIG_DIR/AGENTS.md"
-PI_AGENTS="$PI_AGENT_DIR/AGENTS.md"
-
-# Link the shared AGENTS.md into each tool's config. The symlink target is
-# the container-internal codex home, resolved via the docker bind mounts.
-if [[ -f "$CODEX_AGENTS" ]]; then
-  for TOOL_AGENTS in "$OPENCODE_AGENTS" "$PI_AGENTS"; do
-    if [[ -L "$TOOL_AGENTS" ]] && [[ ! -e "$TOOL_AGENTS" ]]; then
-      echo "Replacing broken AGENTS.md symlink: $TOOL_AGENTS"
-      rm "$TOOL_AGENTS"
-    fi
-    if [[ ! -e "$TOOL_AGENTS" ]]; then
-      echo "Linking shared AGENTS.md into tool config: $TOOL_AGENTS"
-      ln -s /home/dev/.codex/AGENTS.md "$TOOL_AGENTS"
+if [[ -f "$PROJECT_CODEX_DIR/AGENTS.md" ]]; then
+  for AGENTS_LINK in "$OPENCODE_CONFIG_DIR/AGENTS.md" "$PI_CONFIG_DIR/agent/AGENTS.md"; do
+    if [[ ! -e "$AGENTS_LINK" && ! -L "$AGENTS_LINK" ]]; then
+      ln -s /home/dev/.codex/AGENTS.md "$AGENTS_LINK"
     fi
   done
 fi
-
-GITCONFIG="$HOME/.gitconfig"
-GITCONFIG_MOUNT=()
-
-if [[ -f "$GITCONFIG" ]]; then
-  GITCONFIG_MOUNT=(-v "$GITCONFIG:/home/dev/.gitconfig:ro")
+if [[ "$HAPI_RUNNER" -eq 1 && ! -f "$PROJECT_HAPI_DIR/settings.json" ]]; then
+  echo "Configure HAPI in this project's interactive container first:" >&2
+  echo "  HAPI_API_URL=https://your-hub $(basename "$0") \"$PROJECT\"" >&2
+  echo "  Then run 'hapi auth login' inside it and exit." >&2
+  exit 1
 fi
 
-OPENCODE_MOUNTS=(
+HTTP_PROXY_VALUE="${http_proxy:-${HTTP_PROXY:-}}"
+HTTPS_PROXY_VALUE="${https_proxy:-${HTTPS_PROXY:-}}"
+ALL_PROXY_VALUE="${all_proxy:-${ALL_PROXY:-}}"
+NO_PROXY_SOURCE="${no_proxy:-${NO_PROXY:-}}"
+NO_PROXY_VALUE="${NO_PROXY_SOURCE:-localhost,127.0.0.1,::1}"
+BUILD_OPTIONS=()
+[[ "$REBUILD" -eq 0 ]] || BUILD_OPTIONS+=(--no-cache)
+BUILD_PROXY_ARGS=()
+for PROXY_NAME in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY; do
+  case "$PROXY_NAME" in
+    HTTP_PROXY) PROXY_VALUE="$HTTP_PROXY_VALUE" ;;
+    HTTPS_PROXY) PROXY_VALUE="$HTTPS_PROXY_VALUE" ;;
+    ALL_PROXY) PROXY_VALUE="$ALL_PROXY_VALUE" ;;
+    NO_PROXY) PROXY_VALUE="$NO_PROXY_SOURCE" ;;
+  esac
+  [[ -z "$PROXY_VALUE" ]] || BUILD_PROXY_ARGS+=(--build-arg "$PROXY_NAME=$PROXY_VALUE")
+done
+
+echo "Project:   $PROJECT"
+echo "State:     $PROJECT_STATE_ROOT"
+echo "Container: $CONTAINER_NAME"
+echo "Image:     $IMAGE"
+echo "Mode:      $MODE"
+
+if [[ "$REBUILD" -eq 1 ]] || { [[ "$CONTAINER_EXISTS" -eq 0 ]] && ! docker image inspect "$IMAGE" >/dev/null 2>&1; }; then
+  docker build "${BUILD_OPTIONS[@]}" --network host "${BUILD_PROXY_ARGS[@]}" \
+    --build-arg UID="$UID_HOST" --build-arg GID="$GID_HOST" -t "$IMAGE" "$SCRIPT_DIR"
+fi
+# Preserve the old container if the replacement image fails to build.
+if [[ "$REBUILD" -eq 1 && "$CONTAINER_EXISTS" -eq 1 ]]; then
+  docker rm -f "$CONTAINER_NAME" >/dev/null
+  CONTAINER_EXISTS=0
+fi
+if [[ "$CONTAINER_EXISTS" -eq 1 ]]; then
+  CURRENT_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER_NAME")"
+  if [[ "$CURRENT_IMAGE" != "$IMAGE" ]]; then
+    echo "Existing container uses an older image. Use --rebuild to replace it." >&2
+  fi
+  RUNNING="$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME")"
+  if [[ "$HAPI_RUNNER" -eq 1 ]]; then
+    if [[ "$RUNNING" != true ]]; then
+      clear_runner_process_state
+      docker start "$CONTAINER_NAME" >/dev/null
+    fi
+  elif [[ "$PERSISTENT" -eq 1 ]]; then
+    if [[ "$RUNNING" == true ]]; then
+      docker attach "$CONTAINER_NAME"
+    else
+      clear_runner_process_state
+      docker start -ai "$CONTAINER_NAME"
+    fi
+  else
+    echo "Container already exists. Use --persistent to reuse it or remove it locally." >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+RUNTIME_ARGS=(
+  --name "$CONTAINER_NAME" --hostname "$CONTAINER_NAME"
+  --label "codex-container.schema=3" --label "codex-container.project=$PROJECT"
+  --label "codex-container.mode=$MODE"
+  --network host --cap-add=SYS_PTRACE --security-opt seccomp=unconfined
+  -e "http_proxy=$HTTP_PROXY_VALUE" -e "HTTP_PROXY=$HTTP_PROXY_VALUE"
+  -e "https_proxy=$HTTPS_PROXY_VALUE" -e "HTTPS_PROXY=$HTTPS_PROXY_VALUE"
+  -e "all_proxy=$ALL_PROXY_VALUE" -e "ALL_PROXY=$ALL_PROXY_VALUE"
+  -e "no_proxy=$NO_PROXY_VALUE" -e "NO_PROXY=$NO_PROXY_VALUE"
+  -e "TERM=${TERM:-xterm-256color}" -e "COLORTERM=${COLORTERM:-truecolor}"
+  -v "$PROJECT:$WORKDIR_IN_CONTAINER"
+  -v "$PROJECT_CODEX_DIR:/home/dev/.codex"
+  -v "$PROJECT_HAPI_DIR:/home/dev/.hapi"
   -v "$OPENCODE_CONFIG_DIR:/home/dev/.config/opencode"
   -v "$OPENCODE_DATA_DIR:/home/dev/.local/share/opencode"
   -v "$OPENCODE_STATE_DIR:/home/dev/.local/state/opencode"
-)
-
-PI_MOUNTS=(
   -v "$PI_CONFIG_DIR:/home/dev/.pi"
+  -w "$WORKDIR_IN_CONTAINER"
 )
-
-echo "Codex container config:"
-echo "  uid:        $UID_HOST"
-echo "  gid:        $GID_HOST"
-echo "  project:    $PROJECT"
-echo "  workdir:    $WORKDIR_IN_CONTAINER"
-echo "  codex home: $CODEX_HOME"
-echo "  opencode config: $OPENCODE_CONFIG_DIR"
-echo "  opencode data:   $OPENCODE_DATA_DIR"
-echo "  opencode state:  $OPENCODE_STATE_DIR"
-echo "  pi config:       $PI_CONFIG_DIR"
-echo "  image:      $IMAGE"
-echo "  container:  $CONTAINER_NAME"
-echo "  lifetime:   $LIFETIME"
-if [[ -f "$TMUX_CONF" ]]; then
-  echo "  tmux conf:  $TMUX_CONF"
-else
-  echo "  tmux conf:  not found"
-fi
-if [[ -f "$GITCONFIG" ]]; then
-  echo "  gitconfig:  $GITCONFIG"
-else
-  echo "  gitconfig:  not found"
-fi
-if [[ -f "$CODEX_AGENTS" ]]; then
-  echo "  shared AGENTS.md (codex+opencode+pi): $CODEX_AGENTS"
-else
-  echo "  shared AGENTS.md: not found"
-fi
-echo
-
-if [[ "$REBUILD" -eq 1 ]] && docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-  echo "Removing existing container for rebuild: $CONTAINER_NAME"
-  docker rm -f "$CONTAINER_NAME" >/dev/null
-fi
-
-if [[ "$PERSISTENT" -eq 1 ]] && docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-  echo "Persistent container found: $CONTAINER_NAME"
-  CURRENT_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER_NAME")"
-  if [[ "$CURRENT_IMAGE" != "$IMAGE" ]]; then
-    echo "Warning: persistent container uses an outdated image: $CURRENT_IMAGE"
-    echo "Run again with --rebuild to recreate it from: $IMAGE"
+[[ -z "${HAPI_API_URL:-}" ]] || RUNTIME_ARGS+=(-e "HAPI_API_URL=$HAPI_API_URL")
+for SHARED_CONFIG in .tmux.conf .gitconfig; do
+  if [[ -f "$HOME/$SHARED_CONFIG" ]]; then
+    RUNTIME_ARGS+=(-v "$HOME/$SHARED_CONFIG:/home/dev/$SHARED_CONFIG:ro")
   fi
-  if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME")" == "true" ]]; then
-    echo "Attaching to running container: $CONTAINER_NAME"
-    docker attach "$CONTAINER_NAME"
-  else
-    echo "Starting persistent container: $CONTAINER_NAME"
-    docker start -ai "$CONTAINER_NAME"
-  fi
-  exit $?
-fi
-
-BUILD_OPTIONS=()
-BUILD_PROXY_ARGS=()
-
-if [[ "$REBUILD" -eq 1 ]]; then
-  BUILD_OPTIONS+=(--no-cache)
-fi
-
-if [[ -n "$HTTP_PROXY_VALUE" ]]; then
-  BUILD_PROXY_ARGS+=(--build-arg "HTTP_PROXY=$HTTP_PROXY_VALUE")
-fi
-
-if [[ -n "$HTTPS_PROXY_VALUE" ]]; then
-  BUILD_PROXY_ARGS+=(--build-arg "HTTPS_PROXY=$HTTPS_PROXY_VALUE")
-fi
-
-if [[ -n "$NO_PROXY_SOURCE" ]]; then
-  BUILD_PROXY_ARGS+=(--build-arg "NO_PROXY=$NO_PROXY_SOURCE")
-fi
-
-if [[ "$REBUILD" -eq 1 ]] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  if [[ "$REBUILD" -eq 1 ]]; then
-    echo "Rebuilding image: $IMAGE"
-  else
-    echo "Image not found, building: $IMAGE"
-  fi
-  docker build "${BUILD_OPTIONS[@]}" \
-    --network host \
-    "${BUILD_PROXY_ARGS[@]}" \
-    --build-arg UID="$UID_HOST" \
-    --build-arg GID="$GID_HOST" \
-    -t "$IMAGE" \
-    "$SCRIPT_DIR"
+done
+clear_runner_process_state
+if [[ "$HAPI_RUNNER" -eq 1 ]]; then
+  docker run -d "${RUNTIME_ARGS[@]}" "$IMAGE" \
+    hapi runner start-sync --workspace-root "$WORKDIR_IN_CONTAINER"
+  echo "Runner launched. Check readiness with: docker logs $CONTAINER_NAME"
 else
-  echo "Image found: $IMAGE"
+  REMOVE_ARGS=(--rm)
+  [[ "$PERSISTENT" -eq 0 ]] || REMOVE_ARGS=()
+  docker run "${REMOVE_ARGS[@]}" -it "${RUNTIME_ARGS[@]}" "$IMAGE"
 fi
-
-echo
-echo "Starting $LIFETIME container: $CONTAINER_NAME"
-
-RUN_REMOVE=(--rm)
-
-if [[ "$PERSISTENT" -eq 1 ]]; then
-  RUN_REMOVE=()
-fi
-
-docker run "${RUN_REMOVE[@]}" -it \
-  --name "$CONTAINER_NAME" \
-  --network host \
-  --cap-add=SYS_PTRACE \
-  --security-opt seccomp=unconfined \
-  -e http_proxy="$HTTP_PROXY_VALUE" \
-  -e https_proxy="$HTTPS_PROXY_VALUE" \
-  -e HTTP_PROXY="$HTTP_PROXY_VALUE" \
-  -e HTTPS_PROXY="$HTTPS_PROXY_VALUE" \
-  -e no_proxy="$NO_PROXY_VALUE" \
-  -e NO_PROXY="$NO_PROXY_VALUE" \
-  -e TERM="${TERM:-xterm-256color}" \
-  -e COLORTERM="${COLORTERM:-truecolor}" \
-  -e LANG="en_US.UTF-8" \
-  -e LANGUAGE="en_US:en" \
-  -e LC_ALL="en_US.UTF-8" \
-  -v "$PROJECT:$WORKDIR_IN_CONTAINER" \
-  -v "$CODEX_HOME:/home/dev/.codex" \
-  "${OPENCODE_MOUNTS[@]}" \
-  "${PI_MOUNTS[@]}" \
-  "${TMUX_CONF_MOUNT[@]}" \
-  "${GITCONFIG_MOUNT[@]}" \
-  -w "$WORKDIR_IN_CONTAINER" \
-  "$IMAGE"

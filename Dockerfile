@@ -97,6 +97,7 @@ RUN set -eux; \
     npm --version
 
 RUN npm i -g --registry=https://registry.npmmirror.com @openai/codex opencode-ai@latest @earendil-works/pi-coding-agent
+RUN npm i -g --registry=https://registry.npmjs.org @twsxtd/hapi@0.30.7
 
 WORKDIR /work
 
