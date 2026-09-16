@@ -14,6 +14,7 @@ Options:
   --hapi        Start a persistent HAPI Runner container in the background
   --persistent  Keep and reuse an interactive container after exit
   --rebuild     Rebuild the image and replace this project's container
+  --env-file F  Pass a Docker env file to the container (provider keys, etc.)
   -h, --help    Show this help
 USAGE
 }
@@ -21,12 +22,18 @@ USAGE
 PERSISTENT=0
 REBUILD=0
 HAPI_RUNNER=0
+ENV_ARGS=()
 PROJECT_ARG=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --persistent) PERSISTENT=1; shift ;;
     --rebuild) REBUILD=1; shift ;;
     --hapi) HAPI_RUNNER=1; PERSISTENT=1; shift ;;
+    --env-file)
+      [[ $# -ge 2 && -f "$2" && -r "$2" ]] || { echo "--env-file requires a readable file" >&2; exit 2; }
+      ENV_ARGS+=(--env-file "$(realpath -e -- "$2")")
+      shift 2
+      ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
     -*) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -102,6 +109,21 @@ clear_runner_process_state() {
   rm -f -- "$PROJECT_HAPI_DIR/runner.state.json" "$PROJECT_HAPI_DIR/runner.state.json.lock"
 }
 
+check_runner() {
+  echo "Waiting for Hub authentication and Runner RPC readiness (up to 45 seconds)..."
+  if ! docker exec -i "$CONTAINER_NAME" python3 - ready < "$SCRIPT_DIR/hapi-setup.py"; then
+    echo "Runner is not ready. Inspect: docker logs $CONTAINER_NAME" >&2
+    echo "If the container is running, repair credentials: docker exec -it $CONTAINER_NAME hapi auth login" >&2
+    echo "For URL, token environment, or proxy changes, remove and recreate the container; mounted state is kept." >&2
+    return 1
+  fi
+  echo "Agent login/setup: docker exec -it $CONTAINER_NAME bash"
+  echo "  Codex: codex login --device-auth (or codex login); check: codex login status"
+  echo "  API key for Codex: printenv OPENAI_API_KEY | codex login --with-api-key"
+  echo "  Pi: pi, then /login and /model; OpenCode: opencode auth login"
+  echo "Hub readiness does not verify provider credentials, quota, or model access. See docs/agents.md."
+}
+
 CONTAINER_EXISTS=0
 if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
   CONTAINER_EXISTS=1
@@ -152,13 +174,6 @@ if [[ -f "$PROJECT_CODEX_DIR/AGENTS.md" ]]; then
     fi
   done
 fi
-if [[ "$HAPI_RUNNER" -eq 1 && ! -f "$PROJECT_HAPI_DIR/settings.json" ]]; then
-  echo "Configure HAPI in this project's interactive container first:" >&2
-  echo "  HAPI_API_URL=https://your-hub $(basename "$0") \"$PROJECT\"" >&2
-  echo "  Then run 'hapi auth login' inside it and exit." >&2
-  exit 1
-fi
-
 BUILD_OPTIONS=()
 [[ "$REBUILD" -eq 0 ]] || BUILD_OPTIONS+=(--no-cache)
 BUILD_PROXY_ARGS=()
@@ -189,6 +204,10 @@ if [[ "$REBUILD" -eq 1 && "$CONTAINER_EXISTS" -eq 1 ]]; then
   CONTAINER_EXISTS=0
 fi
 if [[ "$CONTAINER_EXISTS" -eq 1 ]]; then
+  if [[ ${#ENV_ARGS[@]} -gt 0 ]]; then
+    echo "An existing container keeps its original environment. Remove it before applying --env-file." >&2
+    exit 1
+  fi
   CURRENT_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER_NAME")"
   if [[ "$CURRENT_IMAGE" != "$IMAGE" ]]; then
     echo "Existing container uses an older image. Use --rebuild to replace it." >&2
@@ -199,6 +218,7 @@ if [[ "$CONTAINER_EXISTS" -eq 1 ]]; then
       clear_runner_process_state
       docker start "$CONTAINER_NAME" >/dev/null
     fi
+    check_runner
   elif [[ "$PERSISTENT" -eq 1 ]]; then
     if [[ "$RUNNING" == true ]]; then
       docker attach "$CONTAINER_NAME"
@@ -218,7 +238,7 @@ RUNTIME_ARGS=(
   --label "agent-container.schema=3" --label "agent-container.project=$PROJECT"
   --label "agent-container.mode=$MODE"
   --network host --cap-add=SYS_PTRACE --security-opt seccomp=unconfined
-  "${PROXY_ARGS[@]}" "${STATE_ARGS[@]}"
+  "${PROXY_ARGS[@]}" "${ENV_ARGS[@]}" "${STATE_ARGS[@]}"
   -e "TERM=${TERM:-xterm-256color}" -e "COLORTERM=${COLORTERM:-truecolor}"
   -v "$PROJECT:$WORKDIR_IN_CONTAINER"
   -w "$WORKDIR_IN_CONTAINER"
@@ -231,9 +251,17 @@ for SHARED_CONFIG in .tmux.conf .gitconfig; do
 done
 clear_runner_process_state
 if [[ "$HAPI_RUNNER" -eq 1 ]]; then
+  SETUP_TTY=()
+  [[ ! -t 0 || ! -t 1 ]] || SETUP_TTY=(-it)
+  SETUP_ENV=("${PROXY_ARGS[@]}" "${ENV_ARGS[@]}")
+  [[ -z "${HAPI_API_URL:-}" ]] || SETUP_ENV+=(-e "HAPI_API_URL=$HAPI_API_URL")
+  docker run --rm "${SETUP_TTY[@]}" --network host "${SETUP_ENV[@]}" \
+    -v "$PROJECT_HAPI_DIR:/home/dev/.hapi" \
+    -v "$SCRIPT_DIR/hapi-setup.py:/tmp/hapi-setup.py:ro" \
+    "$IMAGE" python3 /tmp/hapi-setup.py setup
   docker run -d "${RUNTIME_ARGS[@]}" "$IMAGE" \
     hapi runner start-sync --workspace-root "$WORKDIR_IN_CONTAINER"
-  echo "Runner launched. Check readiness with: docker logs $CONTAINER_NAME"
+  check_runner
 else
   REMOVE_ARGS=(--rm)
   [[ "$PERSISTENT" -eq 0 ]] || REMOVE_ARGS=()

@@ -31,6 +31,8 @@ if args[0] == 'inspect':
     else: sys.exit(9)
     sys.exit(0)
 if args[0] == 'build': sys.exit(config.get('build_exit', 0))
+if args[0] == 'exec': sys.exit(config.get('ready_exit', 0))
+if args[0] == 'run' and args[-1] == 'setup': sys.exit(config.get('setup_exit', 0))
 if args[0] in ('run', 'start', 'attach', 'rm'): sys.exit(0)
 sys.exit(9)
 '''
@@ -138,11 +140,54 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(settings.read_text(), original)
         self.assertNotIn('dummy-token', result.stdout + result.stderr)
 
-    def test_unconfigured_runner_explains_local_login_without_starting_container(self):
+    def test_first_hapi_launch_configures_hub_before_starting_and_checks_rpc(self):
+        result = self.launch('--hapi')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        setup = next(i for i, call in enumerate(calls) if call[-1] == 'setup')
+        runner = next(i for i, call in enumerate(calls) if '-d' in call)
+        ready = next(i for i, call in enumerate(calls) if call[0] == 'exec')
+        self.assertLess(setup, runner)
+        self.assertLess(runner, ready)
+        self.assertIn('--rm', calls[setup])
+        self.assertIn('codex login --device-auth', result.stdout)
+        self.assertIn('Pi: pi, then /login', result.stdout)
+
+    def test_failed_setup_never_starts_background_runner(self):
+        self.configure(setup_exit=1)
+        self.assertNotEqual(self.launch('--hapi').returncode, 0)
+        self.assertFalse(any('-d' in call or call[0] == 'exec' for call in self.calls()))
+
+    def test_rpc_failure_does_not_report_success_even_for_running_container(self):
+        self.login_fixture()
+        self.configure(exists=True, mode='hapi', running=True, ready_exit=1)
         result = self.launch('--hapi')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('hapi auth login', result.stderr)
-        self.assertFalse(any(call[0] == 'run' for call in self.calls()))
+        self.assertIn('Runner is not ready', result.stderr)
+        self.assertIn('docker logs', result.stderr)
+
+    def test_env_file_is_shared_by_setup_and_runner_but_never_build(self):
+        envfile = self.home / 'provider.env'
+        envfile.write_text('ANTHROPIC_API_KEY=private-key\n')
+        result = self.launch('--hapi', '--rebuild', '--env-file', str(envfile))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for call in self.calls():
+            if call[0] == 'run':
+                self.assertIn('--env-file', call)
+                self.assertIn(str(envfile), call)
+            elif call[0] == 'build':
+                self.assertNotIn('--env-file', call)
+            self.assertNotIn('private-key', ' '.join(call))
+        self.assertNotIn('private-key', result.stdout + result.stderr)
+
+    def test_env_file_cannot_be_silently_ignored_for_existing_container(self):
+        self.configure(exists=True, mode='hapi', running=True)
+        envfile = self.home / 'provider.env'
+        envfile.touch()
+        result = self.launch('--hapi', '--env-file', str(envfile))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('original environment', result.stderr)
+        self.assertFalse(any(call[0] in ('start', 'run', 'exec') for call in self.calls()))
 
     def test_stopped_runner_restarts_without_losing_identity(self):
         settings = self.login_fixture()

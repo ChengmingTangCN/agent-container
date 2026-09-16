@@ -31,7 +31,7 @@ sudo ./deploy/vps-setup.sh --hapi-dist /path/to/hapi-build hapi.example.com
 ```
 
 The build directory must be new or created by this script. Rebuilding discards
-changes and artifacts in that directory. Do not supply older patched PWA assets.
+changes and artifacts in that directory.
 
 ## Maintain
 
@@ -56,51 +56,46 @@ To import a stopped Hub's data or consistent backup into an empty data directory
 sudo ./deploy/vps-setup.sh --import-hapi-home /path/to/backup hapi.example.com
 ```
 
-## Migrate from codex-container
-
-Finish active tasks, then stop and remove the old `codex-*` containers. Keep their
-mounted project files and state. With all old containers stopped, rename
-`~/.codex-container` to `~/.agent-container` if the destination does not exist;
-do not merge two existing state roots. Alternatively, set
-`AGENT_CONTAINER_DATA_DIR` to the existing state directory. Replace
-`CODEX_CONTAINER_DATA_DIR` in your shell configuration, reinstall the launcher
-as `~/.local/bin/agent-container`, and remove the old launcher symlink.
-Project hashes are unchanged, so per-project credentials and native resume state
-are reused. Legacy containers with globally shared state must be recreated;
-only the documented seed files are copied into new project state.
-
-On an existing VPS, back up state and configuration, disable and stop
-`codex-hapi-hub.service` and `codex-hapi-cert-renew.timer`, and wait for any active
-`codex-hapi-cert-renew.service` to finish. Move `/var/lib/codex-hapi` to
-`/var/lib/agent-hapi` and `/etc/codex-hapi` to `/etc/agent-hapi`, only when the new
-paths do not exist. The installer updates state ownership and preserves the token.
-Remove `/etc/nginx/conf.d/codex-hapi.conf` and rerun the installer. It creates fresh
-runtime files and certificates under `/opt/agent-hapi`; keep the old runtime and
-certificate tree as a backup until the new deployment works. Disable any legacy
-host-control services too; retired `/api/control` routes return 404.
-
-The installer does not migrate live deployments automatically. Local Runner
-containers keep their credentials and Hub URL; recreate them with the new launcher.
-
 ## Troubleshoot
 
-Start with `docker logs <container-name>`. Check the Hub URL and credentials in
-that project's `hapi/settings.json`. `hapi auth login` does not save `HAPI_API_URL`;
-export it each time or set `apiUrl` in that file. Recreate containers after changing
-the URL or proxy, because existing containers keep their original environment.
+`--hapi` verifies the Hub token and waits up to 45 seconds for a Runner RPC.
+Failure returns a nonzero exit code with repair commands. A Runner already started
+is left available for inspection; setup failures do not start a new Runner.
 
-Both cases of `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` are supported;
-nonempty lowercase values take precedence. For a directly reachable HTTPS IP,
-bypass the proxy if HAPI reports a TLS `servername` error:
+| Symptom | Action |
+| --- | --- |
+| Missing URL/token without a terminal | Run `--hapi` in a terminal, or supply both in `--env-file` |
+| HTTP 401/403 | Check the Hub token/access policy; use the setup prompt or `docker exec -it <container> hapi auth login` |
+| HTTP 409 / RPC version error | Use the same pinned HAPI release on Hub and Runner |
+| HTTP 429 | Wait for the Hub rate limit before retrying |
+| TLS/network error or readiness timeout | Check `docker logs <container>`, Hub URL, certificates, proxy and Hub service |
+| Agent appears available but cannot answer | Follow [agent authentication](agents.md); availability does not verify provider access |
+
+`hapi auth login` only saves a token; rerun `agent-container --hapi <project>` to
+verify the connection. The launcher's first-run setup also saves `apiUrl`. An
+explicit `HAPI_API_URL` overrides it. `CLI_API_TOKEN` in an env file overrides the
+saved token and remains in Docker's environment, rather than being copied to disk.
+Do not clone a project's HAPI state into another project: it includes machine identity.
+
+Existing containers retain their original environment. To change keys, Hub URL,
+or proxy, finish active sessions, remove the container and rerun the launch command:
 
 ```bash
-export NO_PROXY=localhost,127.0.0.1,::1,203.0.113.10  # Use your VPS IP.
-export no_proxy="$NO_PROXY"
+docker stop <container>
+docker rm <container>
+agent-container --hapi --env-file ~/.config/agent-container/myproj.env ~/dev/myproj
 ```
 
-If an agent fails to start, check its credentials, account balance, and referenced
-configuration files. For example, a file named by `model_catalog_json` is not one
-of the seed files and must be copied separately.
+State is retained. Repeat `--env-file` when recreating; an ordinary stop/start
+retains the container's environment. Passing `--env-file` to an existing container
+fails with guidance instead of silently ignoring changes. Files referenced by
+environment variables must also exist inside the container.
+
+Both cases of `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` are forwarded;
+nonempty lowercase values take precedence. Host proxy values take precedence over
+an env file. The Python readiness check uses HTTP(S) proxies; for a SOCKS-only
+setup, expose an HTTP proxy as well. For a directly reachable HTTPS IP with HAPI's
+TLS `servername` error, add the Hub IP to both `NO_PROXY` and `no_proxy`.
 
 ## Verify
 
@@ -108,18 +103,8 @@ of the seed files and must be copied separately.
 python3 -m unittest discover -v
 ```
 
-Launcher tests use simulated Docker; deployment tests check scripts and real
-Nginx routing, rate limits, and logs. Nginx tests skip when Nginx is unavailable.
-Real integration checks should cover Runner readiness, permission approval and
-denial, message sync, Hub restarts, and native session resume after container
-recreation. Mobile UI, installation, and each additional agent need separate
-verification. Earlier Codex checks required approving commands outside its inner
-sandbox; they did not verify that inner sandbox.
-
-Verified on 2026-09-16 after the rename: all 29 tests passed with real Nginx.
-The migrated Runner authenticated to the existing Hub, created a Codex session,
-synced a model reply, and preserved readable history while stopped. After deleting
-and recreating its container, the same native session resumed and synced another
-reply with the machine identity unchanged. Wait for Runner RPC readiness before
-spawning or resuming; Docker startup and an online machine entry alone are not enough.
-This check did not redeploy the VPS or exercise live certificate renewal or mobile UI.
+Tests cover launcher lifecycle, setup/auth failures, Hub RPC readiness, deployment
+scripts, and Nginx routing/rate limits/logs. Nginx tests skip if it is unavailable.
+For integration changes, also check first setup, a real agent reply, and native
+resume after container recreation. Each agent, mobile UI, and VPS certificate
+renewal require their own integration checks.

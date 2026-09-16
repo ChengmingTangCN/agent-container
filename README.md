@@ -1,8 +1,7 @@
 # agent-container
 
 Run CLI coding agents in project-scoped Docker containers. Use upstream HAPI
-for mobile chat, approvals, and conversation history, without a custom control
-service or HAPI patches.
+for mobile chat, approvals, and conversation history.
 
 ```mermaid
 flowchart LR
@@ -37,75 +36,67 @@ sandbox for untrusted code.
 
 ## Quick start
 
-Requires Linux, Bash, and Docker accessible to your user. Set up the Hub using
-[the deployment guide](docs/operations.md), then install the launcher:
+Requires Linux, Bash and Docker accessible to your user. Deploy the Hub using
+[the VPS guide](docs/operations.md#deploy), then from this repository:
 
 ```bash
 mkdir -p ~/.local/bin
 ln -s "$(pwd)/agent-container" ~/.local/bin/agent-container
-# Add ~/.local/bin to PATH if needed.
-export HAPI_API_URL=https://hapi.example.com
-agent-container ~/dev/myproj
+# Add ~/.local/bin to PATH if needed. The project directory must exist.
+agent-container --hapi ~/dev/myproj
 ```
 
-The project must exist. The first launch builds the image. Inside the container:
+The first run builds the image, asks for the HTTPS Hub URL and a hidden access
+token, verifies them, and saves the URL/token in this project's HAPI state.
+The VPS token is at `/etc/agent-hapi/hapi-access-token`. Already configured projects
+reuse their settings. For unattended setup, pass an [env file](docs/agents.md#environment-files).
 
-```bash
-hapi auth login  # Use the Hub access token.
-codex login     # If credentials are not already configured.
-hapi codex      # Start a session synced to the Hub.
-```
+Success means Hub authentication and a round-trip Runner RPC both passed. Sign
+in to that Hub on your phone and create sessions. **Configure the chosen agent's
+provider before sending a prompt:** the launcher prints commands for Codex, Pi and
+OpenCode. Follow [agent login and API keys](docs/agents.md); HAPI login alone does
+not authenticate an agent or verify provider quota/model access.
 
-Sign in to the same Hub URL on your phone. Plain `codex` runs without HAPI sync.
-The image also includes OpenCode and Pi; configure their credentials before
-using `hapi opencode` or `hapi pi`. Codex is the verified integration; consult
-[HAPI's pinned support matrix](https://github.com/tiann/hapi/blob/0239edf38e2da653d662f31039e24ccea04c7837/docs/guide/agents.md)
-for each agent's permissions and resume support.
-
-## Launch modes
+## Use
 
 | Command | Behavior |
 | --- | --- |
 | `agent-container <project>` | Interactive Bash; removes container on exit |
-| `agent-container --persistent <project>` | Reuses interactive Bash container; retains its writable layer |
-| `agent-container --hapi <project>` | Background HAPI Runner; supports session creation from the PWA |
-| `agent-container --rebuild <project>` | Builds without cache, then replaces this project's container |
-
-After configuring HAPI, exit the interactive container before starting `--hapi`.
-A successful launch means Docker accepted the request; check Runner readiness:
+| `agent-container --persistent <project>` | Reuses interactive Bash container |
+| `agent-container --hapi <project>` | Background HAPI Runner; first-run Hub setup and readiness check |
+| `agent-container --rebuild <project>` | Rebuilds without cache, then replaces the project's container; combine with `--hapi` for a Runner |
+| `--env-file <file>` | Explicit runtime environment for a new container; repeat for multiple files |
 
 ```bash
-docker logs <container-name>
-docker exec -it <container-name> bash  # Extra shell; Runner keeps running.
-# In that shell: hapi codex for a new synced session, hapi resume to resume one.
-docker stop <container-name>
-agent-container --hapi <project>      # Restart after a crash or computer reboot.
+docker exec -it <container> bash  # Extra shell; Runner keeps running.
+# In that shell: hapi codex, hapi pi, hapi opencode, or hapi resume.
+docker stop <container>
+agent-container --hapi <project>  # Restart and check after a stop or reboot.
 ```
 
-There is no automatic Runner restart policy. To change startup modes, stop and
-remove the container first. `--rebuild` interrupts running tasks after a successful
-build. Container removal preserves mounted files and state; other installations
-in its writable layer are lost. Exiting an extra shell leaves the Runner running,
-but a session attached to that terminal ends; its synced history remains available.
+Plain `codex` / `pi` / `opencode` runs without HAPI sync. There is no automatic
+Runner restart policy. To change modes or environment, finish sessions and remove
+the container first. Mounted files survive removal; installations in its writable
+layer do not. `--rebuild` interrupts running tasks after the image build succeeds.
 
-## State and configuration
+## State
 
 | Data | Location |
 | --- | --- |
-| Project | Original directory mounted at `/work/<project-name>` |
-| Agent and HAPI state | `~/.agent-container/projects/<path-hash>/{codex,opencode,pi,hapi}/` |
+| Project | Original directory at `/work/<project-name>` |
+| Local agent/HAPI state | `~/.agent-container/projects/<path-hash>/{codex,opencode,pi,hapi}/` |
 | Hub conversations | `/var/lib/agent-hapi/hapi/` on the VPS |
 
-Set `AGENT_CONTAINER_DATA_DIR` to override the local state root. It must not overlap
-the project. The launcher rejects `/`, the host home and its parents, and projects
-inside the host's `.ssh` or `.gnupg`; other directory contents are your responsibility.
+`AGENT_CONTAINER_DATA_DIR` overrides the local state root, which must not overlap
+the project. `/`, the host home and its parents, and projects in `.ssh`/`.gnupg`
+are rejected; other contents are your responsibility.
 
-New projects seed only `auth.json`, `config.toml`, and `AGENTS.md` from
-`<state-root>/seed/codex/`, falling back to the state root. Existing files are never
-overwritten. Copy other referenced configuration files into the project's state.
-OpenCode and Pi link to that project's Codex `AGENTS.md` when no instructions exist.
-Host `.gitconfig` and `.tmux.conf` are mounted read-only when present; the host home,
-full state root, and Docker socket are not automatically mounted.
+New projects seed only Codex `auth.json`, `config.toml`, and `AGENTS.md` from
+`<state-root>/seed/codex/`, falling back to the state root. Existing state is kept;
+copy any other referenced files separately. OpenCode and Pi link to that project's
+Codex instructions when none exist. Host `.gitconfig` and `.tmux.conf` are mounted
+read-only when present; the host home, full state root and Docker socket are not
+mounted automatically.
 
-See [operations](docs/operations.md) for upgrades, backups, troubleshooting,
-verification, and migration from `codex-container`.
+See [agent setup](docs/agents.md) and [operations](docs/operations.md) for
+credentials, persistence, deployment, backups and connection troubleshooting.
