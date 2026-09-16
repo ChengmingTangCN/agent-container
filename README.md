@@ -1,352 +1,142 @@
 # codex-container
 
-Run Codex CLI and OpenCode inside a Docker container.
+Run coding agents in local Docker containers and use a self-hosted HAPI PWA for
+mobile chat, permission approvals, and conversation history. Project files stay
+on your computer; synced conversations are stored on your VPS.
 
-## Core idea
+```mermaid
+flowchart TB
+    Phone["Phone / PWA"]
+    VPS["VPS<br/>HAPI Hub · Nginx · SQLite"]
+    Container["Local project container<br/>HAPI Runner + agent"]
+    Files["Local disk<br/>Project files + agent state"]
 
-This setup treats Docker containers as disposable runtime environments.
-
-By default, each time you run:
-
-```bash
-codex-container /path/to/project
+    Phone <-->|HTTPS| VPS
+    VPS <-->|Session sync| Container
+    Container ---|Bind mounts| Files
 ```
 
-the script creates a new container. Because the container is started with:
+The container initiates the connection to the VPS; no inbound local port is needed.
+An online Runner lets you create and resume supported agent sessions from your
+phone. Synced history remains available when your computer is offline.
 
-```bash
---rm
-```
+## Quick start
 
-the container is automatically deleted after you exit it.
-
-This is intentional.
-
-If you want to keep the container after exit, run:
-
-```bash
-codex-container --persistent /path/to/project
-```
-
-In persistent mode, the container is reused on the next run for the same project path.
-
-The persistent data is kept on the host:
-
-```text
-project files        -> host project directory
-Codex config         -> ~/.codex-container
-OpenCode config      -> ~/.codex-container/opencode/config
-OpenCode data        -> ~/.codex-container/opencode/data
-Pi config            -> ~/.codex-container/pi
-Docker image         -> codex-dev:npm-local-<dockerfile-hash>-uid-<uid>-gid-<gid>
-```
-
-The container itself does not need to persist.
-
-Starting a container is cheap and fast, because the image is reused after it is built once. So the normal workflow is:
-
-```text
-build image once
-run temporary container
-work on mounted project
-exit container
-container is deleted
-run again when needed
-```
-
-## Naming rules
-
-This setup is designed around two rules:
-
-1. The Docker image is tied to the Dockerfile and the host user's UID/GID.
-2. The Docker container name is tied to the project path.
-
-The image is tied to UID/GID because the container runs as a normal user named `dev`, not as `root`.
-
-The `dev` user inside the container uses the same UID/GID as the host user. This allows the container to modify mounted project files without creating root-owned files on the host.
-
-The Dockerfile hash ensures that an updated Dockerfile automatically produces a
-new image instead of silently reusing an outdated one. Example image name:
-
-```text
-codex-dev:npm-local-a1b2c3d4e5f6-uid-1000-gid-1000
-```
-
-The container name is tied to the project path so that one user can run Codex containers for multiple projects at the same time.
-
-Example container name:
-
-```text
-codex-myproj-a1b2c3d4
-```
-
-The project is mounted inside the container under `/work/<project-name>`:
-
-```text
-~/dev/myproj -> /work/myproj
-```
-
-Summary:
-
-```text
-image     -> tied to Dockerfile and UID/GID
-container -> tied to project path
-workdir   -> /work/<project-name>
-lifetime  -> temporary, deleted after exit
-```
-
-## Features
-
-- Runs Codex CLI and OpenCode inside Docker
-- Creates a temporary container for each run
-- Automatically removes the container after exit
-- Can keep and reuse a project container with `--persistent`
-- Can force a clean image rebuild with `--rebuild`
-- Reuses the Docker image after the first build
-- Keeps project data on the host
-- Keeps Codex, OpenCode, and Pi config on the host
-- Runs as normal user `dev`
-- `dev` has passwordless sudo
-- `dev` UID/GID matches the host user
-- Installs npm global packages under `/home/dev/.npm-global`
-- Installs Codex CLI, OpenCode, and Pi as `dev`, so they can update their own packages without sudo
-- Project directory is mounted to `/work/<project-name>`
-- Codex config and OpenCode/Pi config/data are persisted in `~/.codex-container`
-- Reuses host network with `--network host`
-- Reuses host proxy environment variables
-- Automatically builds a new image when the Dockerfile changes
-- Refuses to mount `/`
-- Allows multiple project containers to run at the same time
-
-## Files
-
-```text
-codex-container/
-├── Dockerfile
-├── codex-container
-└── README.md
-```
-
-## Setup
-
-```bash
-chmod +x codex-container
-```
-
-Install to user local bin:
+You need Linux, Bash, Docker, and permission to run Docker as your current user.
+Install the Hub on your VPS using the [deployment guide](docs/operations.md),
+then run these commands from this repository:
 
 ```bash
 mkdir -p ~/.local/bin
 ln -s "$(pwd)/codex-container" ~/.local/bin/codex-container
-```
-
-Make sure `~/.local/bin` is in your `PATH`:
-
-```bash
-echo "$PATH" | tr ':' '\n' | grep -x "$HOME/.local/bin"
-```
-
-Then you can run it from anywhere:
-
-```bash
+# Ensure ~/.local/bin is on PATH.
+export HAPI_API_URL=https://hapi.example.com
 codex-container ~/dev/myproj
 ```
 
-## Usage
+The project directory must already exist. The first launch builds the image;
+subsequent launches reuse it. Set up credentials inside the container:
 
 ```bash
-codex-container /path/to/project
-codex-container --persistent /path/to/project
-codex-container --rebuild /path/to/project
+hapi auth login  # Enter the HAPI access token from your VPS.
+codex login     # If Codex credentials are not already configured.
+hapi codex      # Work in the terminal and sync the session to HAPI.
 ```
 
-Example:
+Open the same Hub URL on your phone and sign in with the access token. Running
+`codex` directly does not sync its session to HAPI. To create sessions from your
+phone, exit the temporary interactive container, then run locally:
 
 ```bash
-codex-container ~/dev/myproj
-codex-container --persistent ~/dev/myproj
-codex-container --rebuild ~/dev/myproj
+codex-container --hapi ~/dev/myproj
 ```
 
-Inside the container:
+Once the Runner appears online in the PWA, select its machine and agent. A
+successful launcher exit means Docker accepted the start request; check the PWA
+or `docker logs <container-name>` to confirm the Runner is ready.
+
+## Launch modes
+
+| Command | Main process | Container lifetime |
+| --- | --- | --- |
+| `codex-container <project>` | Interactive Bash | Removed when Bash exits |
+| `codex-container --persistent <project>` | Reusable interactive Bash | Stops when Bash exits; keeps its writable layer |
+| `codex-container --hapi <project>` | Background HAPI Runner | Continues after the launching terminal closes |
+
+`--hapi` runs the Runner as the container's main process, independently of the
+launching terminal. **There is no automatic restart policy:** run `--hapi` again
+locally after a Runner crash or computer restart. `--persistent` alone does not
+start a Runner.
+
+The launcher prints the container name, state directory, and image name.
+Use Docker for local container management:
 
 ```bash
-codex
-opencode
-pi
+docker logs <container-name>
+docker exec -it <container-name> bash
+docker stop <container-name>
+codex-container --hapi ~/dev/myproj  # Restart the same Runner container.
 ```
 
-Codex, OpenCode, and Pi are installed under the `dev` user's npm prefix:
+To change a container's startup mode, stop it and run `docker rm <container-name>`
+first. `--rebuild` builds without cache, then replaces
+the project's container if the build succeeds, interrupting any running tasks.
+Removing or replacing a container preserves mounted project files and state.
 
-```text
-/home/dev/.npm-global
-```
+## Work locally in a Runner container
 
-This keeps Codex writable by `dev` instead of placing it in a root-owned global npm directory.
-
-Exit the container:
+You can open a shell in a running `--hapi` container without changing its startup
+mode or stopping the Runner:
 
 ```bash
-exit
+docker exec -it <container-name> bash
+hapi codex  # Inside the container: start a new session synced to the same Hub.
 ```
 
-After exit, the container is deleted automatically. Your project files, Codex config, OpenCode config, and Pi config remain on the host.
+The new session and its messages appear in the PWA. Use `hapi resume` inside the
+container to select an existing session instead. Running plain `codex` does not
+automatically sync it to HAPI.
 
-## Proxy
+Exiting this extra shell leaves the Runner running. A locally started Codex
+session ends when its terminal exits; its synced history stays on the VPS and
+can be resumed later.
 
-The script accepts either uppercase or lowercase proxy variables and passes both
-forms into the build and the container:
+## Data and shared configuration
 
-```text
-http_proxy
-https_proxy
-HTTP_PROXY
-HTTPS_PROXY
-no_proxy
-NO_PROXY
-```
+| Data | Storage |
+| --- | --- |
+| Project files | Original local directory, mounted at `/work/<project-name>` |
+| Agent configuration, credentials, and native resume state | `~/.codex-container/projects/<path-hash>/{codex,opencode,pi}/` |
+| HAPI credentials and machine identity | The same project's `hapi/` directory |
+| Synced conversations and messages | `/var/lib/codex-hapi/hapi/` on the VPS |
+| Other container files and temporary software installations | Container writable layer; lost when the container is removed |
 
-Example:
+Each project mounts only its own state. Set `CODEX_CONTAINER_DATA_DIR` to change
+the state root, which must be outside the project directory. New projects copy
+`auth.json`, `config.toml`, and `AGENTS.md` from `~/.codex-container/seed/codex/`,
+falling back to files with the same names in the legacy state root. Seeding runs
+once and never overwrites an existing project. Copy any additional files
+referenced by your configuration into that project's `codex/` directory.
 
-```bash
-export http_proxy=http://127.0.0.1:7890
-export https_proxy=http://127.0.0.1:7890
+Host `.gitconfig` and `.tmux.conf` files are mounted read-only when present. The
+project's Codex `AGENTS.md` is linked for OpenCode and Pi in the same project.
+The host home directory, entire state root, and Docker socket are not mounted.
+VPS history does not replace native agent resume state; back up both separately.
 
-codex-container ~/dev/myproj
-```
+## Scope
 
-Uppercase variables work as well:
+- Manage containers locally. Remote container creation, start/stop controls, and
+  a separate project management page are outside the current scope.
+- Use upstream HAPI without source patches or a custom control service.
+- The image includes Codex, OpenCode, Pi, and HAPI `0.30.7`. Codex is the main
+  verified path. Use `hapi opencode` or `hapi pi` for the other installed agents
+  after configuring their model credentials. DSH is not installed or verified;
+  Z.ai ZCode is not integrated. See the [pinned HAPI support matrix](https://github.com/tiann/hapi/blob/0239edf38e2da653d662f31039e24ccea04c7837/docs/guide/agents.md).
 
-```bash
-export HTTP_PROXY=http://127.0.0.1:7890
-export HTTPS_PROXY=http://127.0.0.1:7890
-export NO_PROXY=localhost,127.0.0.1,::1
-```
+The container retains host networking, `SYS_PTRACE`, `seccomp=unconfined`, and
+passwordless sudo for personal development. This is not strict isolation from a
+malicious agent: host network services remain reachable, and a shared HAPI
+access token grants access within the same Hub permission scope.
 
-Proxy values are supplied as Docker's predefined build arguments. They are not
-written to npm configuration files or printed by the Dockerfile. When no proxy
-environment variables are set, the script leaves Docker's own build proxy
-configuration untouched.
-
-When `--rebuild` is used, the image is built without cache. If a container with
-the same project name exists, it is removed first so persistent containers can
-be recreated from the new image.
-
-Because the container uses `--network host`, `127.0.0.1:7890` inside the container refers to the host proxy service on Linux.
-
-## Build performance
-
-The Dockerfile uses a BuildKit cache mount so apt package downloads survive
-between builds:
-
-```text
-apt package archives and lists -> host build cache
-```
-
-After the first build, a rebuild only re-downloads what actually changed.
-Even `--rebuild`, which disables Docker's normal layer cache, can reuse the
-downloaded packages from this mount.
-
-Notes:
-
-- `--rebuild` passes `--no-cache` to Docker, so the image is built from
-  scratch. Only use it when you really need a clean build.
-- The build cache lives in BuildKit's storage on the host. Inspect it with
-  `docker buildx du` and free space with `docker buildx prune`.
-- The cache is local to the machine that built the image. A new machine starts
-  with an empty cache and needs one full download pass.
-
-## Codex config
-
-Codex config is stored on the host at:
-
-```text
-~/.codex-container
-```
-
-It is mounted into the container as:
-
-```text
-/home/dev/.codex
-```
-
-If the directory does not exist, the script creates it automatically.
-
-## OpenCode config
-
-OpenCode config and data are stored on the host at:
-
-```text
-~/.codex-container/opencode/config
-~/.codex-container/opencode/data
-```
-
-They are mounted into the container at OpenCode's standard paths:
-
-```text
-/home/dev/.config/opencode
-/home/dev/.local/share/opencode
-```
-
-Credentials from `opencode auth login` are kept in the data directory, so they
-survive container rebuilds. The script creates the directories automatically.
-
-## Pi config
-
-Pi config is stored on the host at:
-
-```text
-~/.codex-container/pi
-```
-
-It is mounted into the container at Pi's standard path:
-
-```text
-/home/dev/.pi
-```
-
-Credentials, global settings (`~/.pi/agent/settings.json`), and trust decisions
-survive container rebuilds. The script creates the directory automatically.
-
-## Permission check
-
-Inside the container:
-
-```bash
-whoami
-id
-sudo whoami
-touch test-from-container
-```
-
-Expected:
-
-```text
-dev
-uid=<host-uid>(dev) gid=<host-gid>(dev)
-root
-```
-
-On the host:
-
-```bash
-ls -l test-from-container
-```
-
-The file should be owned by the host user, not root.
-
-## Notes
-
-Prefer mounting a specific project directory:
-
-```bash
-codex-container ~/dev/myproj
-```
-
-Avoid mounting broad directories such as:
-
-```bash
-codex-container ~
-```
-
-The script refuses to mount `/`.
+See the [operations guide](docs/operations.md) for deployment, upgrades, backups,
+proxy troubleshooting, and verification details.
