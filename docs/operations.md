@@ -1,106 +1,113 @@
-# Deployment and troubleshooting
+# Operations
 
-## Deploy the VPS
+## Deploy
 
-The installer targets **x86_64, dnf-based Linux, and systemd**. Prepare a public
-IPv4 address or a domain pointing to the VPS, allow ports 80/443, and copy this
-repository to the VPS. Then run:
+The VPS installer requires x86_64, dnf, systemd, a public IPv4 address or domain,
+and inbound ports 80/443. From this repository on the VPS:
 
 ```bash
 sudo ./deploy/vps-setup.sh hapi.example.com
 ```
 
-The script installs Nginx, TLS certificates, the upstream HAPI Hub, and a
-certificate renewal timer. The Hub listens on `127.0.0.1:3006` and restarts through
-systemd. Local Runners have a separate lifecycle; see the [README](../README.md#launch-modes).
-Native Android/iOS push relays are disabled.
+It installs Nginx, TLS, and the unmodified HAPI Hub listening on `127.0.0.1:3006`.
+Systemd restarts the Hub; native Android/iOS push relays are disabled. A timer
+handles certificate renewal.
 
-| Content | VPS path |
+| Content | Path |
 | --- | --- |
-| HAPI data and SQLite database | `/var/lib/codex-hapi/hapi/` |
-| Login access token | `/etc/codex-hapi/hapi-access-token` (private file) |
-| Hub environment | `/etc/codex-hapi/hub.env` |
-| Hub/PWA runtime files | `/opt/codex-hapi/hapi-runtime/` |
+| Hub data / SQLite | `/var/lib/agent-hapi/hapi/` |
+| Access token | `/etc/agent-hapi/hapi-access-token` |
+| Hub environment | `/etc/agent-hapi/hub.env` |
+| Hub / PWA runtime | `/opt/agent-hapi/hapi-runtime/` |
 
-The build pins HAPI `v0.30.7` at `0239edf38e2da653d662f31039e24ccea04c7837` and
-uses Bun `1.4.0`. It verifies the tag's commit and runs upstream type checks and
-PWA/Hub builds without patches. For a small VPS, prebuild on another machine
-with Git and Bun `1.4.0` installed:
+HAPI is pinned to `v0.30.7`, commit `0239edf38e2da653d662f31039e24ccea04c7837`;
+Bun is pinned to `1.4.0`. The build verifies the tag, checks PWA types, and builds
+upstream assets. To avoid building on a small VPS, use a machine with Git and Bun:
 
 ```bash
 ./deploy/build-hapi.sh /tmp/hapi-build
-# Transfer hub/dist and web/dist to the VPS, keeping their directory structure.
+# Transfer hub/dist and web/dist to the VPS, preserving their directory structure.
 sudo ./deploy/vps-setup.sh --hapi-dist /path/to/hapi-build hapi.example.com
 ```
 
-The build script accepts a new directory or a checkout it created itself.
-Rebuilding cleans all changes and artifacts in that checkout. Prebuilt releases
-must include upstream `hub/dist` and `web/dist`; do not reuse an older patched PWA.
+The build directory must be new or created by this script. Rebuilding discards
+changes and artifacts in that directory. Do not supply older patched PWA assets.
 
-## Check, upgrade, and back up
+## Maintain
 
 ```bash
-systemctl status codex-hapi-hub nginx codex-hapi-cert-renew.timer
-journalctl -u codex-hapi-hub -n 100 --no-pager
+systemctl status agent-hapi-hub nginx agent-hapi-cert-renew.timer
+journalctl -u agent-hapi-hub -n 100 --no-pager
 curl -fsS https://hapi.example.com/health
 ```
 
-Update the repository and rerun the installer to preserve existing credentials
-and data while restarting the Hub. Before deployment, back up the VPS data and
-`/etc/codex-hapi/`. Use a consistent SQLite backup, or stop the Hub before copying
-the complete data directory; copying only a live database's main file is not
-sufficient. Back up local project state separately and protect backups as credentials.
+Back up `/etc/agent-hapi/` and the Hub data before updating this repository and
+rerunning the installer. Use a consistent SQLite backup or stop the Hub before
+copying the complete data directory; copying a live database's main file alone
+is insufficient. Back up local agent state separately and protect it as credentials.
 
-Importing an existing Hub requires an empty target data directory. Use a copy
-from a stopped Hub or a consistent backup:
+To import a stopped Hub's data or consistent backup into an empty data directory:
 
 ```bash
 sudo ./deploy/vps-setup.sh --import-hapi-home /path/to/backup hapi.example.com
 ```
 
-Legacy container layouts are not adopted automatically. Finish active tasks,
-stop and remove the old container locally, then launch the current version,
-keeping project files and state. If you installed the old control layer, disable
-its local management services. The VPS installer disables the old Coordinator
-and retains its data; old `/api/control` routes return 404. Refresh the PWA after
-upgrading and clear its old application cache if needed.
+## Migrate from codex-container
 
-## Runner cannot connect
+Finish active tasks, then stop and remove the old `codex-*` containers. Keep their
+mounted project files and state. With all old containers stopped, rename
+`~/.codex-container` to `~/.agent-container` if the destination does not exist;
+do not merge two existing state roots. Alternatively, set
+`AGENT_CONTAINER_DATA_DIR` to the existing state directory. Replace
+`CODEX_CONTAINER_DATA_DIR` in your shell configuration, reinstall the launcher
+as `~/.local/bin/agent-container`, and remove the old launcher symlink.
+Project hashes are unchanged, so per-project credentials and native resume state
+are reused. Legacy containers with globally shared state must be recreated;
+only the documented seed files are copied into new project state.
 
-Start with `docker logs <container-name>`. Check credentials and the Hub URL in
-the project's `hapi/settings.json`. `hapi auth login` does not save the
-`HAPI_API_URL` environment variable: export it in each new terminal, or set
-`apiUrl` in that configuration file. Existing containers retain their original
-environment; stop, remove, and recreate them after changing the URL or proxy.
+On an existing VPS, back up state and configuration, disable and stop
+`codex-hapi-hub.service` and `codex-hapi-cert-renew.timer`, and wait for any active
+`codex-hapi-cert-renew.service` to finish. Move `/var/lib/codex-hapi` to
+`/var/lib/agent-hapi` and `/etc/codex-hapi` to `/etc/agent-hapi`, only when the new
+paths do not exist. The installer updates state ownership and preserves the token.
+Remove `/etc/nginx/conf.d/codex-hapi.conf` and rerun the installer. It creates fresh
+runtime files and certificates under `/opt/agent-hapi`; keep the old runtime and
+certificate tree as a backup until the new deployment works. Disable any legacy
+host-control services too; retired `/api/control` routes return 404.
 
-Uppercase and lowercase `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`
-are supported, with lowercase values taking precedence. When connecting to an
-HTTPS IP address through a proxy, HAPI may fail with a TLS `servername` error.
-If the VPS is reachable directly, add its IP to both bypass lists before creating
-the container:
+The installer does not migrate live deployments automatically. Local Runner
+containers keep their credentials and Hub URL; recreate them with the new launcher.
+
+## Troubleshoot
+
+Start with `docker logs <container-name>`. Check the Hub URL and credentials in
+that project's `hapi/settings.json`. `hapi auth login` does not save `HAPI_API_URL`;
+export it each time or set `apiUrl` in that file. Recreate containers after changing
+the URL or proxy, because existing containers keep their original environment.
+
+Both cases of `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` are supported;
+nonempty lowercase values take precedence. For a directly reachable HTTPS IP,
+bypass the proxy if HAPI reports a TLS `servername` error:
 
 ```bash
-export NO_PROXY=localhost,127.0.0.1,::1,203.0.113.10  # Replace with your VPS IP.
+export NO_PROXY=localhost,127.0.0.1,::1,203.0.113.10  # Use your VPS IP.
 export no_proxy="$NO_PROXY"
 ```
 
-If the agent fails to start, check model credentials, account balance, and any
-auxiliary files referenced by its configuration. For example, a JSON file named
-by `model_catalog_json` is not one of the three seed files and must be copied manually.
+If an agent fails to start, check its credentials, account balance, and referenced
+configuration files. For example, a file named by `model_catalog_json` is not one
+of the seed files and must be copied separately.
 
-## Verification
+## Verify
 
 ```bash
 python3 -m unittest discover -v
 ```
 
-There are 24 tests: 12 launcher behavior tests use simulated Docker, nine check
-deployment scripts, and three use real Nginx to verify routing, rate limits, and
-logs. The Nginx tests are skipped when Nginx is unavailable.
-
-Local Docker and VPS integration checks covered real Codex execution, permission
-approval and denial, stored messages, history access while the container was
-stopped, Hub restarts, and resuming the same Codex session after recreating its
-container. Mobile/PWA UI interactions, installation, push notifications, and
-DSH/ZCode remain unverified. Codex's inner sandbox failed to start during testing;
-approved commands ran inside Docker. This does not verify the inner sandbox.
+Launcher tests use simulated Docker; deployment tests check scripts and real
+Nginx routing, rate limits, and logs. Nginx tests skip when Nginx is unavailable.
+Real integration checks should cover Runner readiness, permission approval and
+denial, message sync, Hub restarts, and native session resume after container
+recreation. Mobile UI, installation, and each additional agent need separate
+verification. Earlier Codex checks required approving commands outside its inner
+sandbox; they did not verify that inner sandbox.

@@ -31,12 +31,12 @@ if [[ ! "$PUBLIC_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ ]] || [[ "$PUBLIC_HO
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BASE="/opt/codex-hapi"
+BASE="/opt/agent-hapi"
 HAPI_BUILD="$BASE/hapi-build"
 HAPI_RUNTIME="$BASE/hapi-runtime"
-STATE="/var/lib/codex-hapi"
-CONFIG="/etc/codex-hapi"
-SERVICE_USER="codex-hapi"
+STATE="/var/lib/agent-hapi"
+CONFIG="/etc/agent-hapi"
+SERVICE_USER="agent-hapi"
 PUBLIC_URL="https://$PUBLIC_HOST"
 BUN_ARCHIVE_SHA256="2d03fb5fb83ac8b567aca0a281b2ce1a1a19d488f56c2968d88c3f25e92fe452"
 
@@ -51,6 +51,8 @@ install -d -m 755 "$BASE/bin" /var/www/hapi-acme
 install -d -m 755 "$CONFIG"
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 700 \
   "$STATE" "$STATE/hapi"
+# Imported or renamed state can still belong to the previous service user.
+chown -R "$SERVICE_USER:$SERVICE_USER" "$STATE/hapi"
 
 if [[ -n "$IMPORT_HAPI_HOME" ]]; then
   if [[ ! -d "$IMPORT_HAPI_HOME" ]]; then
@@ -127,7 +129,7 @@ target.chmod(0o600)
 PY
 chown "$SERVICE_USER:$SERVICE_USER" "$CONFIG/hub.env"
 
-cat > /etc/systemd/system/codex-hapi-hub.service <<EOF_SERVICE
+cat > /etc/systemd/system/agent-hapi-hub.service <<EOF_SERVICE
 [Unit]
 Description=Central HAPI Hub for container Runners
 After=network-online.target
@@ -188,7 +190,7 @@ PY
   fi
 fi
 
-python3.11 - "$SCRIPT_DIR/nginx-hapi.conf" /etc/nginx/conf.d/codex-hapi.conf \
+python3.11 - "$SCRIPT_DIR/nginx-hapi.conf" /etc/nginx/conf.d/agent-hapi.conf \
   "$PUBLIC_HOST" "$CERT_DIR" <<'PY'
 import sys
 from pathlib import Path
@@ -197,7 +199,7 @@ text = Path(source).read_text().replace("__PUBLIC_HOST__", host).replace("__CERT
 Path(target).write_text(text)
 PY
 
-cat > /etc/systemd/system/codex-hapi-cert-renew.service <<EOF_SERVICE
+cat > /etc/systemd/system/agent-hapi-cert-renew.service <<EOF_SERVICE
 [Unit]
 Description=Renew the HAPI TLS certificate
 
@@ -206,7 +208,7 @@ Type=oneshot
 ExecStart=$CERTBOT renew --quiet --cert-name $PUBLIC_HOST --config-dir $BASE/letsencrypt --work-dir $BASE/letsencrypt-work --logs-dir $BASE/letsencrypt-logs
 ExecStartPost=/usr/bin/systemctl reload nginx
 EOF_SERVICE
-cat > /etc/systemd/system/codex-hapi-cert-renew.timer <<'EOF_TIMER'
+cat > /etc/systemd/system/agent-hapi-cert-renew.timer <<'EOF_TIMER'
 [Unit]
 Description=Daily HAPI TLS certificate renewal
 
@@ -221,9 +223,9 @@ EOF_TIMER
 
 nginx -t
 systemctl daemon-reload
-systemctl enable --now codex-hapi-hub.service nginx \
-  codex-hapi-cert-renew.timer
-systemctl restart codex-hapi-hub.service
+systemctl enable --now agent-hapi-hub.service nginx \
+  agent-hapi-cert-renew.timer
+systemctl restart agent-hapi-hub.service
 systemctl reload nginx
 
 for _ in {1..30}; do
@@ -231,8 +233,8 @@ for _ in {1..30}; do
   sleep 1
 done
 curl -fsS http://127.0.0.1:3006/health >/dev/null
-systemctl is-active codex-hapi-hub.service nginx \
-  codex-hapi-cert-renew.timer
+systemctl is-active agent-hapi-hub.service nginx \
+  agent-hapi-cert-renew.timer
 
 echo "HAPI is ready at $PUBLIC_URL"
 echo "Runner access token: $HAPI_TOKEN_FILE"

@@ -8,7 +8,7 @@ REPO = Path(__file__).resolve().parent
 
 class DeploymentScriptTests(unittest.TestCase):
     def test_shell_scripts_parse_and_obsolete_ingress_is_absent(self):
-        scripts = [REPO / "codex-container", *sorted((REPO / "deploy").glob("*.sh"))]
+        scripts = [REPO / "agent-container", *sorted((REPO / "deploy").glob("*.sh"))]
         self.assertTrue(scripts)
         for script in scripts:
             with self.subTest(script=script.name):
@@ -62,7 +62,7 @@ class DeploymentScriptTests(unittest.TestCase):
     def test_vps_restarts_updated_application_services(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
         enable = script.index("systemctl enable --now")
-        restart = script.index("systemctl restart codex-hapi-hub.service", enable)
+        restart = script.index("systemctl restart agent-hapi-hub.service", enable)
         health_check = script.index("for _ in {1..30}")
         self.assertLess(enable, restart)
         self.assertLess(restart, health_check)

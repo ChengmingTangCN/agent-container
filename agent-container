@@ -45,6 +45,18 @@ done
 [[ -d "$PROJECT_ARG" ]] || { echo "Project directory does not exist: $PROJECT_ARG" >&2; exit 1; }
 PROJECT="$(realpath -e -- "$PROJECT_ARG")"
 [[ "$PROJECT" != / ]] || { echo "Refusing to mount /" >&2; exit 1; }
+HOST_HOME="$(realpath -e -- "$HOME")"
+if [[ "$HOST_HOME" == "$PROJECT" || "$HOST_HOME" == "$PROJECT/"* ]]; then
+  echo "Refusing to mount the host home directory or its parents" >&2
+  exit 1
+fi
+for PRIVATE_DIR in "$HOST_HOME/.ssh" "$HOST_HOME/.gnupg"; do
+  PRIVATE_DIR="$(realpath -m -- "$PRIVATE_DIR")"
+  if [[ "$PROJECT" == "$PRIVATE_DIR" || "$PROJECT" == "$PRIVATE_DIR/"* ]]; then
+    echo "Refusing to use a credential directory as the project: $PROJECT" >&2
+    exit 1
+  fi
+done
 
 DOCKERFILE="$SCRIPT_DIR/Dockerfile"
 [[ -f "$DOCKERFILE" ]] || { echo "Dockerfile not found: $DOCKERFILE" >&2; exit 1; }
@@ -54,12 +66,12 @@ PROJECT_NAME="$(basename "$PROJECT")"
 PROJECT_HASH="$(printf '%s' "$PROJECT" | sha1sum | cut -c1-8)"
 PROJECT_SLUG="$(printf '%s' "$PROJECT_NAME" | LC_ALL=C sed -E 's/[^A-Za-z0-9_.-]+/-/g' | cut -c1-48)"
 IMAGE_REVISION="$(sha256sum "$DOCKERFILE" | cut -c1-12)"
-IMAGE="codex-dev:npm-local-${IMAGE_REVISION}-uid-${UID_HOST}-gid-${GID_HOST}"
-CONTAINER_NAME="codex-${PROJECT_SLUG:-project}-${PROJECT_HASH}"
+IMAGE="agent-container:${IMAGE_REVISION}-uid-${UID_HOST}-gid-${GID_HOST}"
+CONTAINER_NAME="agent-${PROJECT_SLUG:-project}-${PROJECT_HASH}"
 WORKDIR_IN_CONTAINER="/work/$PROJECT_NAME"
-DATA_ROOT="$(realpath -m -- "${CODEX_CONTAINER_DATA_DIR:-$HOME/.codex-container}")"
-if [[ "$DATA_ROOT" == "$PROJECT" || "$DATA_ROOT" == "$PROJECT/"* ]]; then
-  echo "The project must not contain the shared state directory: $DATA_ROOT" >&2
+DATA_ROOT="$(realpath -m -- "${AGENT_CONTAINER_DATA_DIR:-$HOME/.agent-container}")"
+if [[ "$DATA_ROOT" == "$PROJECT" || "$DATA_ROOT" == "$PROJECT/"* || "$PROJECT" == "$DATA_ROOT/"* ]]; then
+  echo "The project and shared state directory must not overlap: $DATA_ROOT" >&2
   exit 1
 fi
 # Docker's -v syntax uses ':' as a delimiter; do not interpret it as mount options.
@@ -72,10 +84,15 @@ done
 PROJECT_STATE_ROOT="$DATA_ROOT/projects/$PROJECT_HASH"
 PROJECT_CODEX_DIR="$PROJECT_STATE_ROOT/codex"
 PROJECT_HAPI_DIR="$PROJECT_STATE_ROOT/hapi"
-OPENCODE_CONFIG_DIR="$PROJECT_STATE_ROOT/opencode/config"
-OPENCODE_DATA_DIR="$PROJECT_STATE_ROOT/opencode/data"
-OPENCODE_STATE_DIR="$PROJECT_STATE_ROOT/opencode/state"
-PI_CONFIG_DIR="$PROJECT_STATE_ROOT/pi"
+# State paths relative to the project state root and container home.
+STATE_MOUNTS=(
+  codex:.codex
+  hapi:.hapi
+  opencode/config:.config/opencode
+  opencode/data:.local/share/opencode
+  opencode/state:.local/state/opencode
+  pi:.pi
+)
 MODE="shell"
 [[ "$HAPI_RUNNER" -eq 0 ]] || MODE="hapi"
 
@@ -88,9 +105,9 @@ clear_runner_process_state() {
 CONTAINER_EXISTS=0
 if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
   CONTAINER_EXISTS=1
-  SCHEMA="$(docker inspect -f '{{ index .Config.Labels "codex-container.schema" }}' "$CONTAINER_NAME")"
-  OLD_PROJECT="$(docker inspect -f '{{ index .Config.Labels "codex-container.project" }}' "$CONTAINER_NAME")"
-  OLD_MODE="$(docker inspect -f '{{ index .Config.Labels "codex-container.mode" }}' "$CONTAINER_NAME")"
+  SCHEMA="$(docker inspect -f '{{ index .Config.Labels "agent-container.schema" }}' "$CONTAINER_NAME")"
+  OLD_PROJECT="$(docker inspect -f '{{ index .Config.Labels "agent-container.project" }}' "$CONTAINER_NAME")"
+  OLD_MODE="$(docker inspect -f '{{ index .Config.Labels "agent-container.mode" }}' "$CONTAINER_NAME")"
   if [[ "$SCHEMA" != 3 || "$OLD_PROJECT" != "$PROJECT" ]]; then
     echo "Existing container uses an old or unrelated layout: $CONTAINER_NAME" >&2
     echo "Stop and remove that container locally before continuing; keep its project and state directories." >&2
@@ -107,10 +124,16 @@ fi
 NEW_PROJECT_STATE=0
 [[ -d "$PROJECT_STATE_ROOT" ]] || NEW_PROJECT_STATE=1
 for STATE_PATH in "$DATA_ROOT" "$DATA_ROOT/projects" "$PROJECT_STATE_ROOT" \
-  "$PROJECT_CODEX_DIR" "$PROJECT_HAPI_DIR" "$OPENCODE_CONFIG_DIR" \
-  "$OPENCODE_DATA_DIR" "$OPENCODE_STATE_DIR" "$PI_CONFIG_DIR" "$PI_CONFIG_DIR/agent"; do
+  "$PROJECT_STATE_ROOT/pi/agent"; do
   mkdir -p -- "$STATE_PATH"
   chmod 700 "$STATE_PATH"
+done
+STATE_ARGS=()
+for MOUNT in "${STATE_MOUNTS[@]}"; do
+  STATE_PATH="$PROJECT_STATE_ROOT/${MOUNT%%:*}"
+  mkdir -p -- "$STATE_PATH"
+  chmod 700 "$STATE_PATH"
+  STATE_ARGS+=(-v "$STATE_PATH:/home/dev/${MOUNT#*:}")
 done
 if [[ "$NEW_PROJECT_STATE" -eq 1 ]]; then
   for CONFIG_NAME in auth.json config.toml AGENTS.md; do
@@ -123,7 +146,7 @@ if [[ "$NEW_PROJECT_STATE" -eq 1 ]]; then
   done
 fi
 if [[ -f "$PROJECT_CODEX_DIR/AGENTS.md" ]]; then
-  for AGENTS_LINK in "$OPENCODE_CONFIG_DIR/AGENTS.md" "$PI_CONFIG_DIR/agent/AGENTS.md"; do
+  for AGENTS_LINK in "$PROJECT_STATE_ROOT/opencode/config/AGENTS.md" "$PROJECT_STATE_ROOT/pi/agent/AGENTS.md"; do
     if [[ ! -e "$AGENTS_LINK" && ! -L "$AGENTS_LINK" ]]; then
       ln -s /home/dev/.codex/AGENTS.md "$AGENTS_LINK"
     fi
@@ -136,22 +159,18 @@ if [[ "$HAPI_RUNNER" -eq 1 && ! -f "$PROJECT_HAPI_DIR/settings.json" ]]; then
   exit 1
 fi
 
-HTTP_PROXY_VALUE="${http_proxy:-${HTTP_PROXY:-}}"
-HTTPS_PROXY_VALUE="${https_proxy:-${HTTPS_PROXY:-}}"
-ALL_PROXY_VALUE="${all_proxy:-${ALL_PROXY:-}}"
-NO_PROXY_SOURCE="${no_proxy:-${NO_PROXY:-}}"
-NO_PROXY_VALUE="${NO_PROXY_SOURCE:-localhost,127.0.0.1,::1}"
 BUILD_OPTIONS=()
 [[ "$REBUILD" -eq 0 ]] || BUILD_OPTIONS+=(--no-cache)
 BUILD_PROXY_ARGS=()
+PROXY_ARGS=()
 for PROXY_NAME in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY; do
-  case "$PROXY_NAME" in
-    HTTP_PROXY) PROXY_VALUE="$HTTP_PROXY_VALUE" ;;
-    HTTPS_PROXY) PROXY_VALUE="$HTTPS_PROXY_VALUE" ;;
-    ALL_PROXY) PROXY_VALUE="$ALL_PROXY_VALUE" ;;
-    NO_PROXY) PROXY_VALUE="$NO_PROXY_SOURCE" ;;
-  esac
+  LOWER_NAME="${PROXY_NAME,,}"
+  PROXY_VALUE="${!LOWER_NAME:-${!PROXY_NAME:-}}"
   [[ -z "$PROXY_VALUE" ]] || BUILD_PROXY_ARGS+=(--build-arg "$PROXY_NAME=$PROXY_VALUE")
+  if [[ "$PROXY_NAME" == NO_PROXY && -z "$PROXY_VALUE" ]]; then
+    PROXY_VALUE="localhost,127.0.0.1,::1"
+  fi
+  PROXY_ARGS+=(-e "$LOWER_NAME=$PROXY_VALUE" -e "$PROXY_NAME=$PROXY_VALUE")
 done
 
 echo "Project:   $PROJECT"
@@ -196,21 +215,12 @@ fi
 
 RUNTIME_ARGS=(
   --name "$CONTAINER_NAME" --hostname "$CONTAINER_NAME"
-  --label "codex-container.schema=3" --label "codex-container.project=$PROJECT"
-  --label "codex-container.mode=$MODE"
+  --label "agent-container.schema=3" --label "agent-container.project=$PROJECT"
+  --label "agent-container.mode=$MODE"
   --network host --cap-add=SYS_PTRACE --security-opt seccomp=unconfined
-  -e "http_proxy=$HTTP_PROXY_VALUE" -e "HTTP_PROXY=$HTTP_PROXY_VALUE"
-  -e "https_proxy=$HTTPS_PROXY_VALUE" -e "HTTPS_PROXY=$HTTPS_PROXY_VALUE"
-  -e "all_proxy=$ALL_PROXY_VALUE" -e "ALL_PROXY=$ALL_PROXY_VALUE"
-  -e "no_proxy=$NO_PROXY_VALUE" -e "NO_PROXY=$NO_PROXY_VALUE"
+  "${PROXY_ARGS[@]}" "${STATE_ARGS[@]}"
   -e "TERM=${TERM:-xterm-256color}" -e "COLORTERM=${COLORTERM:-truecolor}"
   -v "$PROJECT:$WORKDIR_IN_CONTAINER"
-  -v "$PROJECT_CODEX_DIR:/home/dev/.codex"
-  -v "$PROJECT_HAPI_DIR:/home/dev/.hapi"
-  -v "$OPENCODE_CONFIG_DIR:/home/dev/.config/opencode"
-  -v "$OPENCODE_DATA_DIR:/home/dev/.local/share/opencode"
-  -v "$OPENCODE_STATE_DIR:/home/dev/.local/state/opencode"
-  -v "$PI_CONFIG_DIR:/home/dev/.pi"
   -w "$WORKDIR_IN_CONTAINER"
 )
 [[ -z "${HAPI_API_URL:-}" ]] || RUNTIME_ARGS+=(-e "HAPI_API_URL=$HAPI_API_URL")

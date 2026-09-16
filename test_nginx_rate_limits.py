@@ -19,7 +19,7 @@ REPO = Path(__file__).resolve().parent
 @unittest.skipUnless(shutil.which("nginx"), "requires nginx; also run on the VPS before deployment")
 class NginxRateLimitTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="codex-nginx-test-")
+        temporary = tempfile.TemporaryDirectory(prefix="agent-nginx-test-")
         self.addCleanup(temporary.cleanup)
         base = Path(temporary.name)
 

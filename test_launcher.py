@@ -38,14 +38,14 @@ sys.exit(9)
 
 class LauncherTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix='codex-launcher-test-')
+        temporary = tempfile.TemporaryDirectory(prefix='agent-launcher-test-')
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)
         self.home = self.base / 'home'
         self.home.mkdir()
         self.project = self.base / 'projects' / 'a project'
         self.project.mkdir(parents=True)
-        self.data = self.home / '.codex-container'
+        self.data = self.home / '.agent-container'
         digest = hashlib.sha1(os.fsencode(str(self.project))).hexdigest()[:8]
         self.state = self.data / 'projects' / digest
         bindir = self.base / 'bin'
@@ -57,7 +57,7 @@ class LauncherTests(unittest.TestCase):
         self.config_path = self.base / 'docker.json'
         self.configure()
         self.env = os.environ.copy()
-        self.env.update(HOME=str(self.home), CODEX_CONTAINER_DATA_DIR=str(self.data),
+        self.env.update(HOME=str(self.home), AGENT_CONTAINER_DATA_DIR=str(self.data),
                         PATH=str(bindir) + os.pathsep + self.env['PATH'],
                         LAUNCHER_TEST_CALLS=str(self.calls_path),
                         LAUNCHER_TEST_CONFIG=str(self.config_path))
@@ -67,7 +67,7 @@ class LauncherTests(unittest.TestCase):
         self.config_path.write_text(json.dumps({'project': str(self.project), **values}))
 
     def launch(self, *options, project=None):
-        return subprocess.run(['bash', str(REPO / 'codex-container'), *options,
+        return subprocess.run(['bash', str(REPO / 'agent-container'), *options,
                                str(project or self.project)], env=self.env,
                               text=True, capture_output=True, timeout=10)
 
@@ -203,6 +203,34 @@ class LauncherTests(unittest.TestCase):
                 self.assertNotEqual(self.launch(project=project).returncode, 0)
         self.assertFalse(self.calls_path.exists())
 
+    def test_rejects_home_and_credential_paths_with_external_state(self):
+        self.env['AGENT_CONTAINER_DATA_DIR'] = str(self.base / 'external-state')
+        private = self.home / '.ssh' / 'keys'
+        private.mkdir(parents=True)
+        alias = self.base / 'project-alias'
+        alias.symlink_to(private, target_is_directory=True)
+        gnupg = self.home / '.gnupg'
+        gnupg.mkdir()
+        for project in (self.home, self.base, private.parent, private, alias, gnupg):
+            with self.subTest(project=project):
+                self.assertNotEqual(self.launch(project=project).returncode, 0)
+        self.assertFalse(self.calls_path.exists())
+
+    def test_rejects_projects_inside_the_shared_state(self):
+        nested = self.data / 'projects' / 'other-project'
+        nested.mkdir(parents=True)
+        self.assertNotEqual(self.launch(project=nested).returncode, 0)
+        self.assertFalse(self.calls_path.exists())
+
+    def test_default_state_root_and_container_use_agent_names(self):
+        self.env.pop('AGENT_CONTAINER_DATA_DIR')
+        result = self.launch()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.run_args()
+        self.assertEqual(args[args.index('--name') + 1], f'agent-a-project-{self.state.name}')
+        self.assertIn(f'{self.state}/codex:/home/dev/.codex', args)
+        self.assertIn(f'agent-container.project={self.project}', args)
+
     def test_proxy_values_are_forwarded_without_printing_them(self):
         self.env['HTTP_PROXY'] = 'http://username:secret@127.0.0.1:7890'
         self.env.pop('http_proxy', None)
@@ -212,6 +240,18 @@ class LauncherTests(unittest.TestCase):
         build = next(call for call in self.calls() if call[0] == 'build')
         self.assertIn('HTTP_PROXY=' + self.env['HTTP_PROXY'], build)
         self.assertNotIn('username:secret', result.stdout + result.stderr)
+
+    def test_lowercase_proxies_take_precedence_at_build_and_runtime(self):
+        for name in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'):
+            self.env[name] = 'uppercase-value'
+            self.env[name.lower()] = 'lowercase-value'
+        result = self.launch('--rebuild')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        build = next(call for call in self.calls() if call[0] == 'build')
+        for name in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'):
+            self.assertIn(f'{name}=lowercase-value', build)
+            self.assertIn(f'{name}=lowercase-value', self.run_args())
+            self.assertIn(f'{name.lower()}=lowercase-value', self.run_args())
 
 
 if __name__ == '__main__':

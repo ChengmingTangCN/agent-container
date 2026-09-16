@@ -24,9 +24,9 @@ fi
 
 if [[ ! -e "$CHECKOUT_DIR" ]]; then
   git clone --filter=blob:none --no-checkout "$HAPI_REPOSITORY" "$CHECKOUT_DIR"
-  git -C "$CHECKOUT_DIR" config --local codex-container.managed true
+  git -C "$CHECKOUT_DIR" config --local agent-container.managed true
 elif [[ ! -d "$CHECKOUT_DIR/.git" ]] || \
-     [[ "$(git -C "$CHECKOUT_DIR" config --local --get codex-container.managed || true)" != true ]]; then
+     [[ "$(git -C "$CHECKOUT_DIR" config --local --get agent-container.managed || true)" != true ]]; then
   echo "Refusing to replace a directory not created by this script: $CHECKOUT_DIR" >&2
   exit 2
 fi
