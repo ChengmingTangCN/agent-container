@@ -205,8 +205,7 @@ Description=Renew the HAPI TLS certificate
 
 [Service]
 Type=oneshot
-ExecStart=$CERTBOT renew --quiet --cert-name $PUBLIC_HOST --config-dir $BASE/letsencrypt --work-dir $BASE/letsencrypt-work --logs-dir $BASE/letsencrypt-logs
-ExecStartPost=/usr/bin/systemctl reload nginx
+ExecStart=$CERTBOT renew --quiet --webroot --webroot-path /var/www/hapi-acme --cert-name $PUBLIC_HOST --config-dir $BASE/letsencrypt --work-dir $BASE/letsencrypt-work --logs-dir $BASE/letsencrypt-logs --deploy-hook "/usr/bin/systemctl reload nginx"
 EOF_SERVICE
 cat > /etc/systemd/system/agent-hapi-cert-renew.timer <<'EOF_TIMER'
 [Unit]

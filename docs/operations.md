@@ -10,8 +10,8 @@ sudo ./deploy/vps-setup.sh hapi.example.com
 ```
 
 It installs Nginx, TLS, and the unmodified HAPI Hub listening on `127.0.0.1:3006`.
-Systemd restarts the Hub; native Android/iOS push relays are disabled. A timer
-handles certificate renewal.
+Systemd restarts the Hub; native Android/iOS push relays are disabled. Certificate
+renewal uses Nginx's ACME webroot and reloads Nginx after successful renewal.
 
 | Content | Path |
 | --- | --- |
@@ -39,6 +39,10 @@ changes and artifacts in that directory. Do not supply older patched PWA assets.
 systemctl status agent-hapi-hub nginx agent-hapi-cert-renew.timer
 journalctl -u agent-hapi-hub -n 100 --no-pager
 curl -fsS https://hapi.example.com/health
+sudo /opt/agent-hapi/certbot/bin/certbot renew --dry-run --webroot \
+  --webroot-path /var/www/hapi-acme --config-dir /opt/agent-hapi/letsencrypt \
+  --work-dir /opt/agent-hapi/letsencrypt-work \
+  --logs-dir /opt/agent-hapi/letsencrypt-logs
 ```
 
 Back up `/etc/agent-hapi/` and the Hub data before updating this repository and

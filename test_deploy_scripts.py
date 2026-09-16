@@ -1,3 +1,4 @@
+import shlex
 import subprocess
 import unittest
 from pathlib import Path
@@ -75,6 +76,17 @@ class DeploymentScriptTests(unittest.TestCase):
         script = (REPO / "deploy/vps-setup.sh").read_text()
         self.assertIn("Environment=HAPI_ANDROID_PUSH=off", script)
         self.assertIn("Environment=HAPI_IOS_PUSH=off", script)
+
+    def test_renewal_uses_the_served_webroot_without_stopping_nginx(self):
+        script = (REPO / "deploy/vps-setup.sh").read_text()
+        command = next(line.removeprefix("ExecStart=") for line in script.splitlines()
+                       if line.startswith("ExecStart=$CERTBOT renew "))
+        args = shlex.split(command)
+        self.assertIn('--webroot', args)
+        webroot = args[args.index('--webroot-path') + 1]
+        self.assertIn(f'root {webroot};', (REPO / 'deploy/nginx-hapi.conf').read_text())
+        self.assertEqual(args[args.index('--deploy-hook') + 1], '/usr/bin/systemctl reload nginx')
+        self.assertNotIn('--standalone', args)
 
 
 if __name__ == "__main__":
