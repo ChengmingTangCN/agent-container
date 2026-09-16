@@ -115,3 +115,11 @@ denial, message sync, Hub restarts, and native session resume after container
 recreation. Mobile UI, installation, and each additional agent need separate
 verification. Earlier Codex checks required approving commands outside its inner
 sandbox; they did not verify that inner sandbox.
+
+Verified on 2026-09-16 after the rename: all 29 tests passed with real Nginx.
+The migrated Runner authenticated to the existing Hub, created a Codex session,
+synced a model reply, and preserved readable history while stopped. After deleting
+and recreating its container, the same native session resumed and synced another
+reply with the machine identity unchanged. Wait for Runner RPC readiness before
+spawning or resuming; Docker startup and an online machine entry alone are not enough.
+This check did not redeploy the VPS or exercise live certificate renewal or mobile UI.
