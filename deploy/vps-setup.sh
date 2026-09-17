@@ -3,7 +3,6 @@
 set -euo pipefail
 
 IMPORT_HAPI_HOME=""
-HAPI_DIST=""
 while [[ $# -gt 1 ]]; do
   case "$1" in
     --import-hapi-home)
@@ -11,16 +10,11 @@ while [[ $# -gt 1 ]]; do
       IMPORT_HAPI_HOME="$2"
       shift 2
       ;;
-    --hapi-dist)
-      [[ $# -ge 3 ]] || break
-      HAPI_DIST="$2"
-      shift 2
-      ;;
     *) break ;;
   esac
 done
 if [[ "$(id -u)" != 0 ]] || [[ $# != 1 ]]; then
-  echo "Usage: sudo bash vps-setup.sh [--import-hapi-home <directory>] [--hapi-dist <directory>] <public-ip-or-domain>" >&2
+  echo "Usage: sudo bash vps-setup.sh [--import-hapi-home <directory>] <public-ip-or-domain>" >&2
   exit 2
 fi
 
@@ -32,8 +26,8 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE="/opt/agent-hapi"
-HAPI_BUILD="$BASE/hapi-build"
-HAPI_RUNTIME="$BASE/hapi-runtime"
+HAPI_BIN="$BASE/bin/hapi"
+HAPI_VERSION="v0.30.7"
 STATE="/var/lib/agent-hapi"
 CONFIG="/etc/agent-hapi"
 SERVICE_USER="agent-hapi"
@@ -43,10 +37,10 @@ command -v systemctl >/dev/null || { echo "This installer requires systemd" >&2;
 if command -v apt-get >/dev/null; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y ca-certificates curl git nginx python3 python3-pip python3-venv unzip
+  apt-get install -y ca-certificates curl gzip nginx python3 python3-pip python3-venv tar
   PYTHON_BIN="$(command -v python3)"
 elif command -v dnf >/dev/null; then
-  dnf install -y ca-certificates curl git nginx python3.11 python3.11-pip unzip
+  dnf install -y ca-certificates curl gzip nginx python3.11 python3.11-pip tar
   PYTHON_BIN="$(command -v python3.11)"
 else
   echo "This installer supports apt-get or dnf package management" >&2
@@ -60,19 +54,18 @@ fi
 
 case "$(uname -m)" in
   x86_64|amd64)
-    BUN_ARCH="x64"
-    BUN_ARCHIVE_SHA256="2d03fb5fb83ac8b567aca0a281b2ce1a1a19d488f56c2968d88c3f25e92fe452"
+    HAPI_ARCHIVE_NAME="hapi-linux-x64-baseline.tar.gz"
+    HAPI_ARCHIVE_SHA256="d405bd3e592d6444089884cf5b97640eecfdcd8ad37ab06a8e5611f1811c8a41"
     ;;
   aarch64|arm64)
-    BUN_ARCH="aarch64"
-    BUN_ARCHIVE_SHA256="4b1a332ee861983eb93bcfe6f770fff94e3e31b2c388bdaea3c8ed35e58eed0e"
+    HAPI_ARCHIVE_NAME="hapi-linux-arm64.tar.gz"
+    HAPI_ARCHIVE_SHA256="4c11ed308412e4510289ed5e5875a43f60f7ee5cee9cbfdc0e2d97f55851a193"
     ;;
   *)
     echo "Unsupported architecture: $(uname -m); expected x86_64 or arm64" >&2
     exit 2
     ;;
 esac
-BUN_ARCHIVE_NAME="bun-linux-$BUN_ARCH.zip"
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home-dir "$STATE" --create-home --shell /sbin/nologin "$SERVICE_USER"
@@ -98,35 +91,30 @@ if [[ -n "$IMPORT_HAPI_HOME" ]]; then
   chmod 700 "$STATE/hapi"
 fi
 
-if [[ ! -x "$BASE/bin/bun" ]] || [[ "$($BASE/bin/bun --version)" != "1.4.0" ]]; then
-  BUN_ARCHIVE="$(mktemp)"
-  trap 'rm -f "$BUN_ARCHIVE"' EXIT
-  curl -fsSL --retry 3 -o "$BUN_ARCHIVE" \
-    "https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/$BUN_ARCHIVE_NAME"
-  echo "$BUN_ARCHIVE_SHA256  $BUN_ARCHIVE" | sha256sum -c -
-  unzip -p "$BUN_ARCHIVE" "bun-linux-$BUN_ARCH/bun" > "$BASE/bin/bun"
-  chmod 755 "$BASE/bin/bun"
+INSTALLED_HAPI_VERSION=""
+if [[ -x "$HAPI_BIN" ]]; then
+  INSTALLED_HAPI_VERSION="$("$HAPI_BIN" --version 2>/dev/null || true)"
 fi
-
-if [[ -n "$HAPI_DIST" ]]; then
-  HAPI_RELEASE="$HAPI_DIST"
-else
-  PATH="$BASE/bin:$PATH" "$SCRIPT_DIR/build-hapi.sh" "$HAPI_BUILD"
-  HAPI_RELEASE="$HAPI_BUILD"
-fi
-[[ -s "$HAPI_RELEASE/hub/dist/index.js" && -s "$HAPI_RELEASE/web/dist/index.html" ]] || {
-  echo "HAPI release must contain hub/dist/index.js and web/dist/index.html" >&2
-  exit 2
-}
-for COMPONENT in hub web; do
-  install -d -m 755 "$HAPI_RUNTIME/$COMPONENT"
-  rm -rf "$HAPI_RUNTIME/$COMPONENT/dist.new"
-  cp -a "$HAPI_RELEASE/$COMPONENT/dist" "$HAPI_RUNTIME/$COMPONENT/dist.new"
-  rm -rf "$HAPI_RUNTIME/$COMPONENT/dist"
-  mv "$HAPI_RUNTIME/$COMPONENT/dist.new" "$HAPI_RUNTIME/$COMPONENT/dist"
-done
-if [[ -z "$HAPI_DIST" ]]; then
-  git -C "$HAPI_BUILD" clean -fdx
+if [[ "$INSTALLED_HAPI_VERSION" != "hapi version: ${HAPI_VERSION#v}" ]]; then
+  HAPI_ARCHIVE=""
+  HAPI_BIN_TMP=""
+  cleanup_hapi_download() {
+    [[ -z "$HAPI_ARCHIVE" ]] || rm -f -- "$HAPI_ARCHIVE"
+    [[ -z "$HAPI_BIN_TMP" ]] || rm -f -- "$HAPI_BIN_TMP"
+  }
+  trap cleanup_hapi_download EXIT
+  HAPI_ARCHIVE="$(mktemp)"
+  HAPI_BIN_TMP="$(mktemp -p "$BASE/bin" .hapi.XXXXXX)"
+  curl -fsSL --retry 3 -o "$HAPI_ARCHIVE" \
+    "https://github.com/tiann/hapi/releases/download/$HAPI_VERSION/$HAPI_ARCHIVE_NAME"
+  echo "$HAPI_ARCHIVE_SHA256  $HAPI_ARCHIVE" | sha256sum -c -
+  tar -xOzf "$HAPI_ARCHIVE" hapi > "$HAPI_BIN_TMP"
+  chmod 755 "$HAPI_BIN_TMP"
+  [[ "$("$HAPI_BIN_TMP" --version)" == "hapi version: ${HAPI_VERSION#v}" ]] || {
+    echo "Downloaded HAPI binary has an unexpected version" >&2
+    exit 1
+  }
+  mv -f -- "$HAPI_BIN_TMP" "$HAPI_BIN"
 fi
 
 HAPI_TOKEN_FILE="$CONFIG/hapi-access-token"
@@ -169,8 +157,8 @@ Wants=network-online.target
 Type=simple
 User=$SERVICE_USER
 Group=$SERVICE_USER
-WorkingDirectory=$HAPI_RUNTIME/hub
-ExecStart=$BASE/bin/bun $HAPI_RUNTIME/hub/dist/index.js
+WorkingDirectory=$STATE/hapi
+ExecStart=$HAPI_BIN hub --no-relay
 EnvironmentFile=$CONFIG/hub.env
 Environment=HAPI_HOME=$STATE/hapi
 Environment=DB_PATH=$STATE/hapi/hapi.db

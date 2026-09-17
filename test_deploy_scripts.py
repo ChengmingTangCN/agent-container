@@ -29,14 +29,14 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertIn("$request_method $uri $server_protocol", config)
         self.assertNotIn("$request_uri", config.split("limit_req_zone", 1)[0])
 
-    def test_hapi_build_is_pinned_and_uses_unmodified_source(self):
-        script = (REPO / "deploy/build-hapi.sh").read_text()
+    def test_hapi_release_binary_is_pinned_and_verified(self):
+        script = (REPO / "deploy/vps-setup.sh").read_text()
         self.assertIn('HAPI_VERSION="v0.30.7"', script)
-        self.assertIn('HAPI_COMMIT="0239edf38e2da653d662f31039e24ccea04c7837"', script)
-        self.assertNotIn("PATCH_FILE", script)
-        self.assertNotIn(" apply ", script)
-        self.assertIn('reset --hard "$HAPI_COMMIT"', script)
-        self.assertIn("typecheck", script)
+        self.assertIn("https://github.com/tiann/hapi/releases/download/", script)
+        self.assertIn('echo "$HAPI_ARCHIVE_SHA256  $HAPI_ARCHIVE" | sha256sum -c -', script)
+        self.assertIn('tar -xOzf "$HAPI_ARCHIVE" hapi', script)
+        self.assertIn('"$HAPI_BIN_TMP" --version', script)
+        self.assertFalse((REPO / "deploy/build-hapi.sh").exists())
 
     def test_vps_import_preserves_existing_hapi_identity(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
@@ -44,13 +44,12 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertIn('candidate = json.loads(settings_path.read_text()).get("cliApiToken")', script)
         self.assertIn("Refusing to import over a nonempty HAPI state directory", script)
 
-    def test_vps_can_install_a_prebuilt_hapi_distribution(self):
+    def test_vps_no_longer_builds_or_accepts_custom_hapi_assets(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
-        self.assertIn("--hapi-dist", script)
-        self.assertIn('$HAPI_RELEASE/hub/dist/index.js', script)
-        self.assertIn('$HAPI_RELEASE/web/dist/index.html', script)
-        self.assertIn('cp -a "$HAPI_RELEASE/$COMPONENT/dist"', script)
-        self.assertIn('HAPI_RUNTIME="$BASE/hapi-runtime"', script)
+        self.assertNotIn("--hapi-dist", script)
+        self.assertNotIn("bun", script.lower())
+        self.assertNotIn("git clone", script)
+        self.assertNotIn("hapi-runtime", script)
 
     def test_vps_supports_apt_and_dnf_systems(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
@@ -62,13 +61,14 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertIn('"$PYTHON_BIN" -m venv', script)
         self.assertNotIn("requires a dnf-based VPS", script)
 
-    def test_vps_selects_verified_bun_archive_for_each_architecture(self):
+    def test_vps_selects_verified_hapi_archive_for_each_architecture(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
         self.assertIn("x86_64|amd64)", script)
         self.assertIn("aarch64|arm64)", script)
-        self.assertIn('BUN_ARCHIVE_NAME="bun-linux-$BUN_ARCH.zip"', script)
-        self.assertIn("2d03fb5fb83ac8b567aca0a281b2ce1a1a19d488f56c2968d88c3f25e92fe452", script)
-        self.assertIn("4b1a332ee861983eb93bcfe6f770fff94e3e31b2c388bdaea3c8ed35e58eed0e", script)
+        self.assertIn('HAPI_ARCHIVE_NAME="hapi-linux-x64-baseline.tar.gz"', script)
+        self.assertIn('HAPI_ARCHIVE_NAME="hapi-linux-arm64.tar.gz"', script)
+        self.assertIn("d405bd3e592d6444089884cf5b97640eecfdcd8ad37ab06a8e5611f1811c8a41", script)
+        self.assertIn("4c11ed308412e4510289ed5e5875a43f60f7ee5cee9cbfdc0e2d97f55851a193", script)
 
     def test_vps_reloads_an_already_running_nginx(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
@@ -97,9 +97,10 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertIn("http://127.0.0.1:3006/health", script)
         self.assertNotIn('echo "$TOKEN"', script)
 
-    def test_hapi_runs_from_the_bundled_asset_directory(self):
+    def test_hapi_runs_official_binary_without_public_relay(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
-        self.assertIn('WorkingDirectory=$HAPI_RUNTIME/hub', script)
+        self.assertIn('WorkingDirectory=$STATE/hapi', script)
+        self.assertIn('ExecStart=$HAPI_BIN hub --no-relay', script)
 
     def test_native_push_relays_are_disabled_by_default(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()

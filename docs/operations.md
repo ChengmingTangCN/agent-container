@@ -20,20 +20,12 @@ renewal uses Nginx's ACME webroot and reloads Nginx after successful renewal.
 | Hub data / SQLite | `/var/lib/agent-hapi/hapi/` |
 | Access token | `/etc/agent-hapi/hapi-access-token` |
 | Hub environment | `/etc/agent-hapi/hub.env` |
-| Hub / PWA runtime | `/opt/agent-hapi/hapi-runtime/` |
+| HAPI executable | `/opt/agent-hapi/bin/hapi` |
 
-HAPI is pinned to `v0.30.7`, commit `0239edf38e2da653d662f31039e24ccea04c7837`;
-Bun is pinned to `1.4.0`. The build verifies the tag, checks PWA types, and builds
-upstream assets. To avoid building on a small VPS, use a machine with Git and Bun:
-
-```bash
-./deploy/build-hapi.sh /tmp/hapi-build
-# Transfer hub/dist and web/dist to the VPS, preserving their directory structure.
-sudo ./deploy/vps-setup.sh --hapi-dist /path/to/hapi-build hapi.example.com
-```
-
-The build directory must be new or created by this script. Rebuilding discards
-changes and artifacts in that directory.
+HAPI is pinned to the official `v0.30.7` release. The installer selects the
+x86_64 baseline or arm64 archive, verifies its pinned SHA-256 checksum, and
+installs the upstream standalone executable. It does not clone or build HAPI
+and does not install Bun on the VPS.
 
 ## Maintain
 
