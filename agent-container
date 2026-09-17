@@ -181,11 +181,10 @@ PROXY_ARGS=()
 for PROXY_NAME in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY; do
   LOWER_NAME="${PROXY_NAME,,}"
   PROXY_VALUE="${!LOWER_NAME:-${!PROXY_NAME:-}}"
-  [[ -z "$PROXY_VALUE" ]] || BUILD_PROXY_ARGS+=(--build-arg "$PROXY_NAME=$PROXY_VALUE")
-  if [[ "$PROXY_NAME" == NO_PROXY && -z "$PROXY_VALUE" ]]; then
-    PROXY_VALUE="localhost,127.0.0.1,::1"
+  if [[ -n "$PROXY_VALUE" ]]; then
+    BUILD_PROXY_ARGS+=(--build-arg "$PROXY_NAME=$PROXY_VALUE")
+    PROXY_ARGS+=(-e "$LOWER_NAME=$PROXY_VALUE" -e "$PROXY_NAME=$PROXY_VALUE")
   fi
-  PROXY_ARGS+=(-e "$LOWER_NAME=$PROXY_VALUE" -e "$PROXY_NAME=$PROXY_VALUE")
 done
 
 echo "Project:   $PROJECT"

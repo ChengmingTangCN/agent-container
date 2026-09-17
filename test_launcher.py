@@ -286,6 +286,20 @@ class LauncherTests(unittest.TestCase):
         self.assertIn('HTTP_PROXY=' + self.env['HTTP_PROXY'], build)
         self.assertNotIn('username:secret', result.stdout + result.stderr)
 
+    def test_unset_proxies_are_omitted_for_docker_client_defaults(self):
+        proxy_names = ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY')
+        for name in proxy_names:
+            self.env.pop(name, None)
+            self.env.pop(name.lower(), None)
+        result = self.launch('--rebuild')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        build = next(call for call in self.calls() if call[0] == 'build')
+        run = self.run_args()
+        for name in proxy_names:
+            self.assertFalse(any(arg.startswith(f'{name}=') for arg in build))
+            self.assertFalse(any(arg.startswith(f'{name}=') for arg in run))
+            self.assertFalse(any(arg.startswith(f'{name.lower()}=') for arg in run))
+
     def test_lowercase_proxies_take_precedence_at_build_and_runtime(self):
         for name in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'):
             self.env[name] = 'uppercase-value'

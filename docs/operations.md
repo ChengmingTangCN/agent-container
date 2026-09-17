@@ -91,11 +91,19 @@ retains the container's environment. Passing `--env-file` to an existing contain
 fails with guidance instead of silently ignoring changes. Files referenced by
 environment variables must also exist inside the container.
 
-Both cases of `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` are forwarded;
-nonempty lowercase values take precedence. Host proxy values take precedence over
-an env file. The Python readiness check uses HTTP(S) proxies; for a SOCKS-only
-setup, expose an HTTP proxy as well. For a directly reachable HTTPS IP with HAPI's
-TLS `servername` error, add the Hub IP to both `NO_PROXY` and `no_proxy`.
+Nonempty host values for `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`
+are forwarded in both cases; lowercase values take precedence. Unset values are
+not passed as empty variables, so Docker can apply the current user's
+`~/.docker/config.json` `proxies` settings to new containers and builds. Explicit
+host values take precedence over Docker client defaults and an env file. Existing
+containers keep the environment captured when they were created.
+
+The Python readiness check uses HTTP(S) proxies; for a SOCKS-only setup, expose
+an HTTP proxy as well. For a directly reachable HTTPS IP with HAPI's TLS
+`servername` error, include the Hub IP in `NO_PROXY`/`no_proxy`. With this
+launcher's Linux host networking, a proxy listening on host `127.0.0.1` is
+reachable from the container; a remote Docker daemon resolves that address on
+the daemon host instead.
 
 ## Verify
 
