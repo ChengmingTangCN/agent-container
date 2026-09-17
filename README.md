@@ -91,12 +91,18 @@ layer do not. `--rebuild` interrupts running tasks after the image build succeed
 the project. `/`, the host home and its parents, and projects in `.ssh`/`.gnupg`
 are rejected; other contents are your responsibility.
 
-New projects seed only Codex `auth.json`, `config.toml`, and `AGENTS.md` from
-`<state-root>/seed/codex/`, falling back to the state root. Existing state is kept;
-copy any other referenced files separately. OpenCode and Pi link to that project's
-Codex instructions when none exist. Host `.gitconfig` and `.tmux.conf` are mounted
-read-only when present; the host home, full state root and Docker socket are not
-mounted automatically.
+Every project receives a separate Codex home, including its native sessions and
+runtime state. New projects seed only Codex `auth.json`, `config.toml`, and
+`AGENTS.md` from `<state-root>/seed/codex/`, falling back to the state root. This
+is an explicit one-time copy: the host `~/.codex` is not imported, existing
+project state is not overwritten, and credentials are not live-shared between
+containers. Choose model and reasoning effort per session in HAPI. See
+[project state and trusted seed](docs/agents.md#project-state-and-trusted-seed)
+for manual setup.
+
+OpenCode and Pi link to that project's Codex instructions when none exist. Host
+`.gitconfig` and `.tmux.conf` are mounted read-only when present; the host home,
+full state root and Docker socket are not mounted automatically.
 
 See [agent setup](docs/agents.md) and [operations](docs/operations.md) for
 credentials, persistence, deployment, backups and connection troubleshooting.

@@ -33,6 +33,40 @@ model. Configure it in `~/.codex/config.toml`; referenced files must exist insid
 the container. `codex login status` reports local login state, not a live check of
 every provider, token, quota or model. See [Codex authentication](https://developers.openai.com/codex/auth/).
 
+### Project state and trusted seed
+
+Each project has a separate Codex home at
+`~/.agent-container/projects/<path-hash>/codex/` on the host. Native Codex
+sessions, history and runtime state therefore do not appear in another project's
+container. The launcher never mounts or automatically imports the host user's
+`~/.codex` directory.
+
+For a new project only, the launcher copies `auth.json`, `config.toml`, and
+`AGENTS.md` when present in `~/.agent-container/seed/codex/`. Populate that
+trusted seed explicitly from an existing host login:
+
+```bash
+mkdir -p ~/.agent-container/seed/codex
+cp ~/.codex/auth.json ~/.agent-container/seed/codex/auth.json
+chmod 600 ~/.agent-container/seed/codex/auth.json
+```
+
+If the first login was completed inside a project container, copy from the
+project `codex/auth.json` path under the `State:` directory printed by the
+launcher instead. `AGENT_CONTAINER_DATA_DIR` replaces `~/.agent-container` in
+these paths when set.
+
+Seeding copies files; it does not live-share them. Existing project state is
+never overwritten, so add or replace its files manually while its Runner is
+stopped. Do not bind-mount one host `auth.json` file into every container: Codex
+can refresh or remove file-backed credentials, and concurrent containers should
+not write the same credential file.
+
+Choose the Codex model and reasoning effort when creating a HAPI session or from
+that session's controls. HAPI applies those values to the individual Codex
+thread; it does not rewrite the seeded `config.toml`. This launcher does not add
+or synchronize named Codex profiles.
+
 ## Pi and OpenCode
 
 For Pi, run `pi`, use `/login` to select a provider and enter its API key or complete

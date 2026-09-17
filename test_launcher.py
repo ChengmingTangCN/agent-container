@@ -114,16 +114,27 @@ class LauncherTests(unittest.TestCase):
         seed = self.data / 'seed' / 'codex'
         seed.mkdir(parents=True)
         (seed / 'auth.json').write_text('reusable-credential')
+        (seed / 'config.toml').write_text('model_provider = "openai"\n')
         (seed / 'AGENTS.md').write_text('project instructions')
         (seed / 'sessions').mkdir()
         (seed / 'sessions' / 'other.jsonl').write_text('other-history')
         self.assertEqual(self.launch().returncode, 0)
         self.assertEqual((self.state / 'codex/auth.json').read_text(), 'reusable-credential')
+        self.assertEqual((self.state / 'codex/config.toml').read_text(),
+                         'model_provider = "openai"\n')
         self.assertFalse((self.state / 'codex/sessions').exists())
         self.assertEqual(os.readlink(self.state / 'pi/agent/AGENTS.md'), '/home/dev/.codex/AGENTS.md')
         (self.state / 'codex/auth.json').write_text('refreshed-project-credential')
         self.assertEqual(self.launch().returncode, 0)
         self.assertEqual((self.state / 'codex/auth.json').read_text(), 'refreshed-project-credential')
+
+    def test_host_codex_login_is_not_imported_without_an_explicit_seed(self):
+        host_codex = self.home / '.codex'
+        host_codex.mkdir()
+        (host_codex / 'auth.json').write_text('host-login')
+        result = self.launch()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.state / 'codex/auth.json').exists())
 
     def test_hapi_runs_upstream_runner_with_same_project_mounts_and_url(self):
         settings = self.login_fixture()
