@@ -2,8 +2,10 @@
 
 ## Deploy
 
-The VPS installer requires x86_64, dnf, systemd, a public IPv4 address or domain,
-and inbound ports 80/443. From this repository on the VPS:
+The VPS installer supports current Debian/Ubuntu (`apt-get`) and Fedora/RHEL-family
+(`dnf`) systems on x86_64 or arm64. It requires systemd, Python 3.10 or newer, a
+public IPv4 address or domain, and inbound ports 80/443. From this repository on
+the VPS:
 
 ```bash
 sudo ./deploy/vps-setup.sh hapi.example.com

@@ -13,9 +13,16 @@ ENV_FILE="$CONFIG/hub.env"
 SERVICE_USER="agent-hapi"
 SERVICE="agent-hapi-hub.service"
 
-command -v python3.11 >/dev/null || { echo "python3.11 is required" >&2; exit 2; }
 command -v systemctl >/dev/null || { echo "systemctl is required" >&2; exit 2; }
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 2; }
+PYTHON_BIN=""
+for CANDIDATE in python3 python3.14 python3.13 python3.12 python3.11 python3.10; do
+  if command -v "$CANDIDATE" >/dev/null; then
+    PYTHON_BIN="$(command -v "$CANDIDATE")"
+    break
+  fi
+done
+[[ -n "$PYTHON_BIN" ]] || { echo "Python 3 is required" >&2; exit 2; }
 [[ -d "$CONFIG" && -f "$TOKEN_FILE" && -f "$ENV_FILE" ]] || {
   echo "HAPI is not installed: expected $TOKEN_FILE and $ENV_FILE" >&2
   exit 2
@@ -33,7 +40,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-TOKEN="$(python3.11 -c 'import secrets; print(secrets.token_urlsafe(48))')"
+TOKEN="$("$PYTHON_BIN" -c 'import secrets; print(secrets.token_urlsafe(48))')"
 printf '%s\n' "$TOKEN" > "$TOKEN_TMP"
 printf 'CLI_API_TOKEN=%s\n' "$TOKEN" > "$ENV_TMP"
 chown "$SERVICE_USER:$SERVICE_USER" "$TOKEN_TMP" "$ENV_TMP"

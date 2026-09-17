@@ -38,11 +38,41 @@ STATE="/var/lib/agent-hapi"
 CONFIG="/etc/agent-hapi"
 SERVICE_USER="agent-hapi"
 PUBLIC_URL="https://$PUBLIC_HOST"
-BUN_ARCHIVE_SHA256="2d03fb5fb83ac8b567aca0a281b2ce1a1a19d488f56c2968d88c3f25e92fe452"
 
-command -v dnf >/dev/null || { echo "This installer requires a dnf-based VPS" >&2; exit 2; }
-[[ "$(uname -m)" == "x86_64" ]] || { echo "This VPS installer currently requires x86_64" >&2; exit 2; }
-dnf install -y git nginx python3.11 python3.11-pip unzip curl
+command -v systemctl >/dev/null || { echo "This installer requires systemd" >&2; exit 2; }
+if command -v apt-get >/dev/null; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y ca-certificates curl git nginx python3 python3-pip python3-venv unzip
+  PYTHON_BIN="$(command -v python3)"
+elif command -v dnf >/dev/null; then
+  dnf install -y ca-certificates curl git nginx python3.11 python3.11-pip unzip
+  PYTHON_BIN="$(command -v python3.11)"
+else
+  echo "This installer supports apt-get or dnf package management" >&2
+  exit 2
+fi
+
+if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))'; then
+  echo "Python 3.10 or newer is required" >&2
+  exit 2
+fi
+
+case "$(uname -m)" in
+  x86_64|amd64)
+    BUN_ARCH="x64"
+    BUN_ARCHIVE_SHA256="2d03fb5fb83ac8b567aca0a281b2ce1a1a19d488f56c2968d88c3f25e92fe452"
+    ;;
+  aarch64|arm64)
+    BUN_ARCH="aarch64"
+    BUN_ARCHIVE_SHA256="4b1a332ee861983eb93bcfe6f770fff94e3e31b2c388bdaea3c8ed35e58eed0e"
+    ;;
+  *)
+    echo "Unsupported architecture: $(uname -m); expected x86_64 or arm64" >&2
+    exit 2
+    ;;
+esac
+BUN_ARCHIVE_NAME="bun-linux-$BUN_ARCH.zip"
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home-dir "$STATE" --create-home --shell /sbin/nologin "$SERVICE_USER"
@@ -72,9 +102,9 @@ if [[ ! -x "$BASE/bin/bun" ]] || [[ "$($BASE/bin/bun --version)" != "1.4.0" ]]; 
   BUN_ARCHIVE="$(mktemp)"
   trap 'rm -f "$BUN_ARCHIVE"' EXIT
   curl -fsSL --retry 3 -o "$BUN_ARCHIVE" \
-    https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/bun-linux-x64.zip
+    "https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/$BUN_ARCHIVE_NAME"
   echo "$BUN_ARCHIVE_SHA256  $BUN_ARCHIVE" | sha256sum -c -
-  unzip -p "$BUN_ARCHIVE" bun-linux-x64/bun > "$BASE/bin/bun"
+  unzip -p "$BUN_ARCHIVE" "bun-linux-$BUN_ARCH/bun" > "$BASE/bin/bun"
   chmod 755 "$BASE/bin/bun"
 fi
 
@@ -101,7 +131,7 @@ fi
 
 HAPI_TOKEN_FILE="$CONFIG/hapi-access-token"
 if [[ ! -s "$HAPI_TOKEN_FILE" ]]; then
-  python3.11 - "$HAPI_TOKEN_FILE" "$STATE/hapi/settings.json" <<'PY'
+  "$PYTHON_BIN" - "$HAPI_TOKEN_FILE" "$STATE/hapi/settings.json" <<'PY'
 import json, secrets, sys
 from pathlib import Path
 path, settings_path = map(Path, sys.argv[1:])
@@ -119,7 +149,7 @@ PY
 fi
 chown "$SERVICE_USER:$SERVICE_USER" "$HAPI_TOKEN_FILE"
 
-python3.11 - "$CONFIG/hub.env" "$HAPI_TOKEN_FILE" <<'PY'
+"$PYTHON_BIN" - "$CONFIG/hub.env" "$HAPI_TOKEN_FILE" <<'PY'
 import sys
 from pathlib import Path
 target, token_file = map(Path, sys.argv[1:])
@@ -169,14 +199,14 @@ fi
 
 CERTBOT="$BASE/certbot/bin/certbot"
 if [[ ! -x "$CERTBOT" ]]; then
-  python3.11 -m venv "$BASE/certbot"
+  "$PYTHON_BIN" -m venv "$BASE/certbot"
   "$BASE/certbot/bin/pip" install 'certbot==5.8.0'
 fi
 CERT_ARGS=(--config-dir "$BASE/letsencrypt" --work-dir "$BASE/letsencrypt-work" --logs-dir "$BASE/letsencrypt-logs")
 CERT_DIR="$BASE/letsencrypt/live/$PUBLIC_HOST"
 if [[ ! -f "$CERT_DIR/fullchain.pem" ]]; then
   systemctl stop nginx 2>/dev/null || true
-  if python3.11 - "$PUBLIC_HOST" <<'PY'
+  if "$PYTHON_BIN" - "$PUBLIC_HOST" <<'PY'
 import ipaddress, sys
 ipaddress.ip_address(sys.argv[1])
 PY
@@ -190,7 +220,7 @@ PY
   fi
 fi
 
-python3.11 - "$SCRIPT_DIR/nginx-hapi.conf" /etc/nginx/conf.d/agent-hapi.conf \
+"$PYTHON_BIN" - "$SCRIPT_DIR/nginx-hapi.conf" /etc/nginx/conf.d/agent-hapi.conf \
   "$PUBLIC_HOST" "$CERT_DIR" <<'PY'
 import sys
 from pathlib import Path

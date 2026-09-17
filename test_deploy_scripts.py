@@ -52,6 +52,24 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertIn('cp -a "$HAPI_RELEASE/$COMPONENT/dist"', script)
         self.assertIn('HAPI_RUNTIME="$BASE/hapi-runtime"', script)
 
+    def test_vps_supports_apt_and_dnf_systems(self):
+        script = (REPO / "deploy/vps-setup.sh").read_text()
+        self.assertIn("command -v apt-get", script)
+        self.assertIn("apt-get update", script)
+        self.assertIn("apt-get install -y", script)
+        self.assertIn("command -v dnf", script)
+        self.assertIn("dnf install -y", script)
+        self.assertIn('"$PYTHON_BIN" -m venv', script)
+        self.assertNotIn("requires a dnf-based VPS", script)
+
+    def test_vps_selects_verified_bun_archive_for_each_architecture(self):
+        script = (REPO / "deploy/vps-setup.sh").read_text()
+        self.assertIn("x86_64|amd64)", script)
+        self.assertIn("aarch64|arm64)", script)
+        self.assertIn('BUN_ARCHIVE_NAME="bun-linux-$BUN_ARCH.zip"', script)
+        self.assertIn("2d03fb5fb83ac8b567aca0a281b2ce1a1a19d488f56c2968d88c3f25e92fe452", script)
+        self.assertIn("4b1a332ee861983eb93bcfe6f770fff94e3e31b2c388bdaea3c8ed35e58eed0e", script)
+
     def test_vps_reloads_an_already_running_nginx(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
         enable = script.index("systemctl enable --now")
