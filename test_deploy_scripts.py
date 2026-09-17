@@ -28,6 +28,8 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertIn("proxy_pass http://127.0.0.1:3006", config)
         self.assertIn("$request_method $uri $server_protocol", config)
         self.assertNotIn("$request_uri", config.split("limit_req_zone", 1)[0])
+        self.assertEqual(config.count("server_tokens off;"), 2)
+        self.assertNotIn("\nserver_tokens off;", config)
 
     def test_hapi_release_binary_is_pinned_and_verified(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
