@@ -68,6 +68,17 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertLess(enable, restart)
         self.assertLess(restart, health_check)
 
+    def test_token_rotation_updates_both_token_sources_and_checks_health(self):
+        script = (REPO / "deploy/rotate-hapi-token.sh").read_text()
+        self.assertIn('TOKEN_FILE="$CONFIG/hapi-access-token"', script)
+        self.assertIn('ENV_FILE="$CONFIG/hub.env"', script)
+        self.assertIn("secrets.token_urlsafe(48)", script)
+        self.assertIn("printf 'CLI_API_TOKEN=%s\\n'", script)
+        self.assertIn('chmod 600 "$TOKEN_TMP" "$ENV_TMP"', script)
+        self.assertIn('systemctl restart "$SERVICE"', script)
+        self.assertIn("http://127.0.0.1:3006/health", script)
+        self.assertNotIn('echo "$TOKEN"', script)
+
     def test_hapi_runs_from_the_bundled_asset_directory(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
         self.assertIn('WorkingDirectory=$HAPI_RUNTIME/hub', script)

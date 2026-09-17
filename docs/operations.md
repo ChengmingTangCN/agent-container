@@ -45,6 +45,30 @@ sudo /opt/agent-hapi/certbot/bin/certbot renew --dry-run --webroot \
   --logs-dir /opt/agent-hapi/letsencrypt-logs
 ```
 
+To generate and activate a new Hub access token:
+
+```bash
+sudo ./deploy/rotate-hapi-token.sh
+sudo cat /etc/agent-hapi/hapi-access-token
+```
+
+The script updates both `/etc/agent-hapi/hapi-access-token` and the Hub's native
+`CLI_API_TOKEN` in `/etc/agent-hapi/hub.env`, restarts the Hub, and waits for its
+local health check. There is no grace period: the old token stops working when
+the Hub restarts. Sign in again from the PWA/mobile client and update each Runner.
+
+For a Runner using its project-local `.hapi/settings.json`, authenticate inside
+the container and rerun the launcher to verify the connection:
+
+```bash
+docker exec -it <container> hapi auth login
+agent-container --hapi /path/to/project
+```
+
+If a Runner gets `CLI_API_TOKEN` from `--env-file`, update that file, then stop
+and remove the existing container and rerun the same launch command. Docker does
+not change an existing container's environment in place.
+
 Back up `/etc/agent-hapi/` and the Hub data before updating this repository and
 rerunning the installer. Use a consistent SQLite backup or stop the Hub before
 copying the complete data directory; copying a live database's main file alone
