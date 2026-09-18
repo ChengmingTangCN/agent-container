@@ -120,23 +120,94 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(args[args.index('--add-host') + 1],
                          f'{hostname}:127.0.1.1')
 
-    def test_seeds_only_selected_config_once_without_copying_history(self):
-        seed = self.data / 'seed' / 'codex'
-        seed.mkdir(parents=True)
-        (seed / 'auth.json').write_text('reusable-credential')
-        (seed / 'config.toml').write_text('model_provider = "openai"\n')
-        (seed / 'AGENTS.md').write_text('project instructions')
-        (seed / 'sessions').mkdir()
-        (seed / 'sessions' / 'other.jsonl').write_text('other-history')
+    def test_seeds_selected_agent_config_and_shared_instructions_once(self):
+        seed = self.data / 'seed'
+        codex_seed = seed / 'codex'
+        pi_seed = seed / 'pi'
+        opencode_seed = seed / 'opencode'
+        codex_seed.mkdir(parents=True)
+        pi_seed.mkdir()
+        opencode_seed.mkdir()
+        (codex_seed / 'auth.json').write_text('codex-credential')
+        (codex_seed / 'config.toml').write_text('model_provider = "openai"\n')
+        (pi_seed / 'auth.json').write_text('pi-credential')
+        (pi_seed / 'settings.json').write_text('{"defaultProvider":"deepseek"}\n')
+        (pi_seed / 'models.json').write_text('{"providers":{}}\n')
+        (pi_seed / 'models-store.json').write_text('generated-cache')
+        (opencode_seed / 'auth.json').write_text('opencode-credential')
+        (opencode_seed / 'opencode.json').write_text('{"model":"provider/model"}\n')
+        (seed / 'AGENTS.md').write_text('shared agent instructions')
+        (codex_seed / 'sessions').mkdir()
+        (codex_seed / 'sessions' / 'other.jsonl').write_text('other-history')
+        (pi_seed / 'sessions').mkdir()
+        (pi_seed / 'sessions' / 'other.jsonl').write_text('other-history')
+        (opencode_seed / 'sessions').mkdir()
+        (opencode_seed / 'sessions' / 'other.jsonl').write_text('other-history')
         self.assertEqual(self.launch().returncode, 0)
-        self.assertEqual((self.state / 'codex/auth.json').read_text(), 'reusable-credential')
+        self.assertEqual((self.state / 'codex/auth.json').read_text(), 'codex-credential')
         self.assertEqual((self.state / 'codex/config.toml').read_text(),
                          'model_provider = "openai"\n')
+        self.assertEqual((self.state / 'pi/agent/auth.json').read_text(), 'pi-credential')
+        self.assertEqual((self.state / 'pi/agent/settings.json').read_text(),
+                         '{"defaultProvider":"deepseek"}\n')
+        self.assertEqual((self.state / 'pi/agent/models.json').read_text(),
+                         '{"providers":{}}\n')
+        self.assertFalse((self.state / 'pi/agent/models-store.json').exists())
+        self.assertEqual((self.state / 'opencode/data/auth.json').read_text(),
+                         'opencode-credential')
+        self.assertEqual((self.state / 'opencode/config/opencode.json').read_text(),
+                         '{"model":"provider/model"}\n')
         self.assertFalse((self.state / 'codex/sessions').exists())
-        self.assertEqual(os.readlink(self.state / 'pi/agent/AGENTS.md'), '/home/dev/.codex/AGENTS.md')
+        self.assertFalse((self.state / 'pi/sessions').exists())
+        self.assertFalse((self.state / 'opencode/sessions').exists())
+        instruction_files = [
+            self.state / 'codex/AGENTS.md',
+            self.state / 'pi/agent/AGENTS.md',
+            self.state / 'opencode/config/AGENTS.md',
+        ]
+        for path in instruction_files:
+            self.assertEqual(path.read_text(), 'shared agent instructions')
+            self.assertFalse(path.is_symlink())
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         (self.state / 'codex/auth.json').write_text('refreshed-project-credential')
+        (self.state / 'pi/agent/auth.json').write_text('project-pi-credential')
+        (self.state / 'pi/agent/settings.json').write_text('{"defaultProvider":"project"}\n')
+        (self.state / 'pi/agent/models.json').write_text('{"providers":{"project":{}}}\n')
+        (self.state / 'opencode/data/auth.json').write_text('project-opencode-credential')
+        (self.state / 'opencode/config/opencode.json').write_text('{"model":"project/model"}\n')
+        (self.state / 'pi/agent/AGENTS.md').write_text('pi-specific instructions')
         self.assertEqual(self.launch().returncode, 0)
         self.assertEqual((self.state / 'codex/auth.json').read_text(), 'refreshed-project-credential')
+        self.assertEqual((self.state / 'pi/agent/auth.json').read_text(), 'project-pi-credential')
+        self.assertEqual((self.state / 'pi/agent/settings.json').read_text(),
+                         '{"defaultProvider":"project"}\n')
+        self.assertEqual((self.state / 'pi/agent/models.json').read_text(),
+                         '{"providers":{"project":{}}}\n')
+        self.assertEqual((self.state / 'opencode/data/auth.json').read_text(),
+                         'project-opencode-credential')
+        self.assertEqual((self.state / 'opencode/config/opencode.json').read_text(),
+                         '{"model":"project/model"}\n')
+        self.assertEqual((self.state / 'pi/agent/AGENTS.md').read_text(),
+                         'pi-specific instructions')
+
+    def test_existing_instruction_links_are_not_migrated(self):
+        codex = self.state / 'codex'
+        pi = self.state / 'pi' / 'agent'
+        opencode = self.state / 'opencode' / 'config'
+        for directory in (codex, pi, opencode):
+            directory.mkdir(parents=True)
+        (codex / 'AGENTS.md').write_text('existing instructions')
+        for path in (pi / 'AGENTS.md', opencode / 'AGENTS.md'):
+            path.symlink_to('/home/dev/.codex/AGENTS.md')
+        seed = self.data / 'seed'
+        seed.mkdir(exist_ok=True)
+        (seed / 'AGENTS.md').write_text('new seed instructions')
+
+        self.assertEqual(self.launch().returncode, 0)
+
+        self.assertEqual((codex / 'AGENTS.md').read_text(), 'existing instructions')
+        self.assertEqual(os.readlink(pi / 'AGENTS.md'), '/home/dev/.codex/AGENTS.md')
+        self.assertEqual(os.readlink(opencode / 'AGENTS.md'), '/home/dev/.codex/AGENTS.md')
 
     def test_host_codex_login_is_not_imported_without_an_explicit_seed(self):
         host_codex = self.home / '.codex'

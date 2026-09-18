@@ -35,32 +35,54 @@ every provider, token, quota or model. See [Codex authentication](https://develo
 
 ### Project state and trusted seed
 
-Each project has a separate Codex home at
-`~/.agent-container/projects/<path-hash>/codex/` on the host. Native Codex
-sessions, history and runtime state therefore do not appear in another project's
-container. The launcher never mounts or automatically imports the host user's
-`~/.codex` directory.
+Each project has separate Codex, Pi, and OpenCode homes under
+`~/.agent-container/projects/<path-hash>/` on the host. Native sessions, history,
+and runtime state therefore do not appear in another project's container. The
+launcher never mounts or automatically imports the host user's agent homes.
 
-For a new project only, the launcher copies `auth.json`, `config.toml`, and
-`AGENTS.md` when present in `~/.agent-container/seed/codex/`. Populate that
-trusted seed explicitly from an existing host login:
+For a new project only, the launcher copies these optional trusted seed files:
 
-```bash
-mkdir -p ~/.agent-container/seed/codex
-cp ~/.codex/auth.json ~/.agent-container/seed/codex/auth.json
-chmod 600 ~/.agent-container/seed/codex/auth.json
+```text
+~/.agent-container/seed/
+├── AGENTS.md          -> independent Codex, Pi, and OpenCode copies
+├── codex/
+│   ├── auth.json      -> codex/auth.json
+│   └── config.toml    -> codex/config.toml
+├── pi/
+│   ├── auth.json      -> pi/agent/auth.json
+│   ├── settings.json  -> pi/agent/settings.json
+│   └── models.json    -> pi/agent/models.json
+└── opencode/
+    ├── auth.json      -> opencode/data/auth.json
+    └── opencode.json  -> opencode/config/opencode.json
 ```
 
-If the first login was completed inside a project container, copy from the
-project `codex/auth.json` path under the `State:` directory printed by the
-launcher instead. `AGENT_CONTAINER_DATA_DIR` replaces `~/.agent-container` in
-these paths when set.
+Populate only the files needed for future projects:
+
+```bash
+install -d -m 700 ~/.agent-container/seed/{codex,pi,opencode}
+install -m 600 ~/.codex/auth.json ~/.agent-container/seed/codex/auth.json
+install -m 600 ~/.codex/config.toml ~/.agent-container/seed/codex/config.toml
+install -m 600 ~/.pi/agent/auth.json ~/.agent-container/seed/pi/auth.json
+install -m 600 ~/.pi/agent/settings.json ~/.agent-container/seed/pi/settings.json
+install -m 600 ~/.pi/agent/models.json ~/.agent-container/seed/pi/models.json
+install -m 600 ~/.local/share/opencode/auth.json ~/.agent-container/seed/opencode/auth.json
+install -m 600 ~/.config/opencode/opencode.json ~/.agent-container/seed/opencode/opencode.json
+install -m 600 /path/to/AGENTS.md ~/.agent-container/seed/AGENTS.md
+```
+
+If login was completed inside a project container, copy from that project's
+`codex/auth.json`, `pi/agent/auth.json`, or `opencode/data/auth.json` under the
+`State:` directory printed by the launcher instead. `AGENT_CONTAINER_DATA_DIR` replaces
+`~/.agent-container` in these paths when set.
 
 Seeding copies files; it does not live-share them. Existing project state is
 never overwritten, so add or replace its files manually while its Runner is
-stopped. Do not bind-mount one host `auth.json` file into every container: Codex
-can refresh or remove file-backed credentials, and concurrent containers should
-not write the same credential file.
+stopped. The three instruction files may diverge after initialization. Older
+projects keep any instruction links created by an earlier launcher. Do not
+bind-mount one host `auth.json` file into every container: agents can refresh or
+remove file-backed credentials, and concurrent containers should not write the
+same credential file.
 
 Choose the Codex model and reasoning effort when creating a HAPI session or from
 that session's controls. HAPI applies those values to the individual Codex
@@ -74,7 +96,9 @@ OAuth, then `/model` to choose a model. Save the default with Ctrl+S in the mode
 selector, or set `defaultProvider` and `defaultModel` in `~/.pi/agent/settings.json`.
 Alternatively pass provider variables such as `ANTHROPIC_API_KEY` or
 `OPENAI_API_KEY` through an env file. Pi's `~/.pi/agent/` stores credentials,
-settings and native sessions in the project's mounted `pi/` directory.
+settings and native sessions in the project's mounted `pi/` directory. Custom
+providers and models belong in `~/.pi/agent/models.json`; generated
+`models-store.json` catalog data is cache and is not seeded.
 
 `pi auth check --provider anthropic --no-refresh` checks locally configured
 credentials without printing them or refreshing OAuth. This still does not prove
@@ -83,8 +107,10 @@ login in the native `pi` terminal, then create a new HAPI session. See
 [Pi providers](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/docs/providers.md).
 
 For OpenCode, run `opencode auth login`, then choose the provider/model in
-`opencode`. Its config, data (including credentials), and state directories are
-mounted separately. See [OpenCode providers](https://opencode.ai/docs/providers/).
+`opencode`. Credentials are stored in `~/.local/share/opencode/auth.json`; custom
+provider and model definitions belong in `~/.config/opencode/opencode.json`.
+Its config, data, and state directories are mounted separately. See
+[OpenCode providers](https://opencode.ai/docs/providers/).
 
 Codex, Pi and OpenCode are installed in the image. More agents need their native
 CLI, provider setup and persistent state mount; installing a CLI alone does not

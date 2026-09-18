@@ -141,7 +141,7 @@ if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
   fi
 fi
 
-# Only selected reusable Codex files are seeded. Never copy another project's
+# Only selected reusable agent files are seeded. Never copy another project's
 # sessions or HAPI machine identity, and never mount DATA_ROOT into a container.
 NEW_PROJECT_STATE=0
 [[ -d "$PROJECT_STATE_ROOT" ]] || NEW_PROJECT_STATE=1
@@ -158,7 +158,7 @@ for MOUNT in "${STATE_MOUNTS[@]}"; do
   STATE_ARGS+=(-v "$STATE_PATH:/home/dev/${MOUNT#*:}")
 done
 if [[ "$NEW_PROJECT_STATE" -eq 1 ]]; then
-  for CONFIG_NAME in auth.json config.toml AGENTS.md; do
+  for CONFIG_NAME in auth.json config.toml; do
     for SEED_DIR in "$DATA_ROOT/seed/codex" "$DATA_ROOT"; do
       if [[ -f "$SEED_DIR/$CONFIG_NAME" ]]; then
         install -m 600 "$SEED_DIR/$CONFIG_NAME" "$PROJECT_CODEX_DIR/$CONFIG_NAME"
@@ -166,13 +166,24 @@ if [[ "$NEW_PROJECT_STATE" -eq 1 ]]; then
       fi
     done
   done
-fi
-if [[ -f "$PROJECT_CODEX_DIR/AGENTS.md" ]]; then
-  for AGENTS_LINK in "$PROJECT_STATE_ROOT/opencode/config/AGENTS.md" "$PROJECT_STATE_ROOT/pi/agent/AGENTS.md"; do
-    if [[ ! -e "$AGENTS_LINK" && ! -L "$AGENTS_LINK" ]]; then
-      ln -s /home/dev/.codex/AGENTS.md "$AGENTS_LINK"
+  for CONFIG_NAME in auth.json settings.json models.json; do
+    if [[ -f "$DATA_ROOT/seed/pi/$CONFIG_NAME" ]]; then
+      install -m 600 "$DATA_ROOT/seed/pi/$CONFIG_NAME" "$PROJECT_STATE_ROOT/pi/agent/$CONFIG_NAME"
     fi
   done
+  if [[ -f "$DATA_ROOT/seed/opencode/auth.json" ]]; then
+    install -m 600 "$DATA_ROOT/seed/opencode/auth.json" "$PROJECT_STATE_ROOT/opencode/data/auth.json"
+  fi
+  if [[ -f "$DATA_ROOT/seed/opencode/opencode.json" ]]; then
+    install -m 600 "$DATA_ROOT/seed/opencode/opencode.json" "$PROJECT_STATE_ROOT/opencode/config/opencode.json"
+  fi
+  if [[ -f "$DATA_ROOT/seed/AGENTS.md" ]]; then
+    for AGENTS_FILE in "$PROJECT_CODEX_DIR/AGENTS.md" \
+      "$PROJECT_STATE_ROOT/opencode/config/AGENTS.md" \
+      "$PROJECT_STATE_ROOT/pi/agent/AGENTS.md"; do
+      install -m 600 "$DATA_ROOT/seed/AGENTS.md" "$AGENTS_FILE"
+    done
+  fi
 fi
 BUILD_OPTIONS=()
 [[ "$REBUILD" -eq 0 ]] || BUILD_OPTIONS+=(--no-cache)
