@@ -190,6 +190,35 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual((self.state / 'pi/agent/AGENTS.md').read_text(),
                          'pi-specific instructions')
 
+    def test_later_seed_files_fill_existing_project_state_without_overwriting(self):
+        pi_agent = self.state / 'pi' / 'agent'
+        pi_agent.mkdir(parents=True)
+        (self.state / 'codex').mkdir()
+        (pi_agent / 'settings.json').write_text('{"defaultProvider":"project"}\n')
+        (self.state / 'codex' / 'auth.json').write_text('project-credential')
+        seed = self.data / 'seed'
+        (seed / 'pi').mkdir(parents=True)
+        (seed / 'codex').mkdir()
+        (seed / 'pi' / 'auth.json').write_text('pi-credential')
+        (seed / 'pi' / 'settings.json').write_text('{"defaultProvider":"seed"}\n')
+        (seed / 'pi' / 'models.json').write_text('{"providers":{}}\n')
+        (seed / 'codex' / 'auth.json').write_text('seed-credential')
+        (seed / 'AGENTS.md').write_text('seeded instructions')
+
+        result = self.launch()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((pi_agent / 'auth.json').read_text(), 'pi-credential')
+        self.assertEqual((pi_agent / 'settings.json').read_text(),
+                         '{"defaultProvider":"project"}\n')
+        self.assertEqual((pi_agent / 'models.json').read_text(), '{"providers":{}}\n')
+        self.assertEqual((self.state / 'codex' / 'auth.json').read_text(),
+                         'project-credential')
+        for path in (pi_agent / 'AGENTS.md', self.state / 'codex' / 'AGENTS.md',
+                     self.state / 'opencode' / 'config' / 'AGENTS.md'):
+            self.assertEqual(path.read_text(), 'seeded instructions')
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
     def test_existing_instruction_links_are_not_migrated(self):
         codex = self.state / 'codex'
         pi = self.state / 'pi' / 'agent'

@@ -143,8 +143,14 @@ fi
 
 # Only selected reusable agent files are seeded. Never copy another project's
 # sessions or HAPI machine identity, and never mount DATA_ROOT into a container.
-NEW_PROJECT_STATE=0
-[[ -d "$PROJECT_STATE_ROOT" ]] || NEW_PROJECT_STATE=1
+# Seeding only fills gaps: an existing file or link is never replaced, so each
+# project keeps its own credentials, settings and instructions.
+seed_missing_file() {
+  local SEED_FILE="$1" DEST_FILE="$2"
+  [[ -f "$SEED_FILE" ]] || return 0
+  [[ ! -e "$DEST_FILE" && ! -L "$DEST_FILE" ]] || return 0
+  install -m 600 "$SEED_FILE" "$DEST_FILE"
+}
 for STATE_PATH in "$DATA_ROOT" "$DATA_ROOT/projects" "$PROJECT_STATE_ROOT" \
   "$PROJECT_STATE_ROOT/pi/agent"; do
   mkdir -p -- "$STATE_PATH"
@@ -157,34 +163,27 @@ for MOUNT in "${STATE_MOUNTS[@]}"; do
   chmod 700 "$STATE_PATH"
   STATE_ARGS+=(-v "$STATE_PATH:/home/dev/${MOUNT#*:}")
 done
-if [[ "$NEW_PROJECT_STATE" -eq 1 ]]; then
-  for CONFIG_NAME in auth.json config.toml; do
-    for SEED_DIR in "$DATA_ROOT/seed/codex" "$DATA_ROOT"; do
-      if [[ -f "$SEED_DIR/$CONFIG_NAME" ]]; then
-        install -m 600 "$SEED_DIR/$CONFIG_NAME" "$PROJECT_CODEX_DIR/$CONFIG_NAME"
-        break
-      fi
-    done
-  done
-  for CONFIG_NAME in auth.json settings.json models.json; do
-    if [[ -f "$DATA_ROOT/seed/pi/$CONFIG_NAME" ]]; then
-      install -m 600 "$DATA_ROOT/seed/pi/$CONFIG_NAME" "$PROJECT_STATE_ROOT/pi/agent/$CONFIG_NAME"
+for CONFIG_NAME in auth.json config.toml; do
+  for SEED_DIR in "$DATA_ROOT/seed/codex" "$DATA_ROOT"; do
+    if [[ -f "$SEED_DIR/$CONFIG_NAME" ]]; then
+      seed_missing_file "$SEED_DIR/$CONFIG_NAME" "$PROJECT_CODEX_DIR/$CONFIG_NAME"
+      break
     fi
   done
-  if [[ -f "$DATA_ROOT/seed/opencode/auth.json" ]]; then
-    install -m 600 "$DATA_ROOT/seed/opencode/auth.json" "$PROJECT_STATE_ROOT/opencode/data/auth.json"
-  fi
-  if [[ -f "$DATA_ROOT/seed/opencode/opencode.json" ]]; then
-    install -m 600 "$DATA_ROOT/seed/opencode/opencode.json" "$PROJECT_STATE_ROOT/opencode/config/opencode.json"
-  fi
-  if [[ -f "$DATA_ROOT/seed/AGENTS.md" ]]; then
-    for AGENTS_FILE in "$PROJECT_CODEX_DIR/AGENTS.md" \
-      "$PROJECT_STATE_ROOT/opencode/config/AGENTS.md" \
-      "$PROJECT_STATE_ROOT/pi/agent/AGENTS.md"; do
-      install -m 600 "$DATA_ROOT/seed/AGENTS.md" "$AGENTS_FILE"
-    done
-  fi
-fi
+done
+for CONFIG_NAME in auth.json settings.json models.json; do
+  seed_missing_file "$DATA_ROOT/seed/pi/$CONFIG_NAME" \
+    "$PROJECT_STATE_ROOT/pi/agent/$CONFIG_NAME"
+done
+seed_missing_file "$DATA_ROOT/seed/opencode/auth.json" \
+  "$PROJECT_STATE_ROOT/opencode/data/auth.json"
+seed_missing_file "$DATA_ROOT/seed/opencode/opencode.json" \
+  "$PROJECT_STATE_ROOT/opencode/config/opencode.json"
+for AGENTS_FILE in "$PROJECT_CODEX_DIR/AGENTS.md" \
+  "$PROJECT_STATE_ROOT/opencode/config/AGENTS.md" \
+  "$PROJECT_STATE_ROOT/pi/agent/AGENTS.md"; do
+  seed_missing_file "$DATA_ROOT/seed/AGENTS.md" "$AGENTS_FILE"
+done
 BUILD_OPTIONS=()
 [[ "$REBUILD" -eq 0 ]] || BUILD_OPTIONS+=(--no-cache)
 BUILD_PROXY_ARGS=()

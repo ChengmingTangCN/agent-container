@@ -141,15 +141,17 @@ the project. `/`, the host home and its parents, and projects in `.ssh`/`.gnupg`
 are rejected; other contents are your responsibility.
 
 Every project receives separate agent homes, including native sessions and
-runtime state. New projects can seed Codex `auth.json` and `config.toml` from
+runtime state. The launcher fills missing project state from the optional
+trusted seed: Codex `auth.json` and `config.toml` from
 `<state-root>/seed/codex/`, Pi `auth.json`, `settings.json`, and `models.json`
 from `<state-root>/seed/pi/`, and OpenCode `auth.json` and `opencode.json` from
 `<state-root>/seed/opencode/`.
-They also receive independent Codex, Pi, and OpenCode copies of
-`<state-root>/seed/AGENTS.md`.
-This is an explicit one-time copy: host agent homes are not imported, existing
-project state is not overwritten, and credentials are not live-shared between
-containers. Choose model and reasoning effort per session in HAPI. See
+Each agent also receives its own copy of `<state-root>/seed/AGENTS.md`.
+Seeding only fills gaps: host agent homes are not imported, existing files and
+links are never replaced, and credentials are not live-shared between
+containers. A credential deleted inside a container (for example with
+`/logout`) is restored from the seed by the next launcher run; delete the seed
+file to prevent that. Choose model and reasoning effort per session in HAPI. See
 [project state and trusted seed](docs/agents.md#project-state-and-trusted-seed)
 for manual setup.
 

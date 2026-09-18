@@ -40,7 +40,7 @@ Each project has separate Codex, Pi, and OpenCode homes under
 and runtime state therefore do not appear in another project's container. The
 launcher never mounts or automatically imports the host user's agent homes.
 
-For a new project only, the launcher copies these optional trusted seed files:
+The launcher fills missing project state from these optional trusted seed files:
 
 ```text
 ~/.agent-container/seed/
@@ -76,10 +76,12 @@ If login was completed inside a project container, copy from that project's
 `State:` directory printed by the launcher instead. `AGENT_CONTAINER_DATA_DIR` replaces
 `~/.agent-container` in these paths when set.
 
-Seeding copies files; it does not live-share them. Existing project state is
-never overwritten, so add or replace its files manually while its Runner is
-stopped. The three instruction files may diverge after initialization. Older
-projects keep any instruction links created by an earlier launcher. Do not
+Seeding copies files; it does not live-share them. It only fills gaps: an
+existing file or link is never overwritten, so replace credentials and settings
+manually while the Runner is stopped. A credential deleted inside a container is
+restored from the seed by the next launcher run; remove it from the seed to
+prevent that. The three instruction files may diverge after initialization.
+Older projects keep any instruction links created by an earlier launcher. Do not
 bind-mount one host `auth.json` file into every container: agents can refresh or
 remove file-backed credentials, and concurrent containers should not write the
 same credential file.
