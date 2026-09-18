@@ -110,6 +110,16 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual((unrelated / 'settings.json').read_text(), 'private-other-project')
         self.assertEqual((self.state / 'codex').stat().st_mode & 0o777, 0o700)
 
+    def test_host_network_container_resolves_its_configured_hostname(self):
+        result = self.launch()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.run_args()
+        hostname = args[args.index('--hostname') + 1]
+        self.assertIn('--network', args)
+        self.assertEqual(args[args.index('--network') + 1], 'host')
+        self.assertEqual(args[args.index('--add-host') + 1],
+                         f'{hostname}:127.0.1.1')
+
     def test_seeds_only_selected_config_once_without_copying_history(self):
         seed = self.data / 'seed' / 'codex'
         seed.mkdir(parents=True)

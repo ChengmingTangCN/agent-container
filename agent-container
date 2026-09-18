@@ -234,6 +234,7 @@ fi
 
 RUNTIME_ARGS=(
   --name "$CONTAINER_NAME" --hostname "$CONTAINER_NAME"
+  --add-host "$CONTAINER_NAME:127.0.1.1"
   --label "agent-container.schema=3" --label "agent-container.project=$PROJECT"
   --label "agent-container.mode=$MODE"
   --network host --cap-add=SYS_PTRACE --security-opt seccomp=unconfined
