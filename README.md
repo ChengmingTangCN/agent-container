@@ -4,11 +4,60 @@ Run CLI coding agents in project-scoped Docker containers. Use upstream HAPI
 for mobile chat, approvals, and conversation history.
 
 ```mermaid
+%%{init: {
+  "theme": "base",
+  "themeVariables": {
+    "fontFamily": "Inter, ui-sans-serif, system-ui, sans-serif",
+    "primaryTextColor": "#111827",
+    "lineColor": "#5b48d8",
+    "background": "#ffffff",
+    "edgeLabelBackground": "#ffffff",
+    "clusterBkg": "#faf9ff",
+    "clusterBorder": "#7657ff"
+  },
+  "flowchart": {
+    "htmlLabels": true,
+    "curve": "linear",
+    "nodeSpacing": 34,
+    "rankSpacing": 48
+  }
+}}%%
 flowchart LR
-    Phone[Phone / PWA] <-->|HTTPS| Hub[HAPI Hub / VPS]
-    Hub <-->|Session sync| Container[Local container / agent]
-    Container ---|Bind mounts| Files[Project / agent state]
-    Container <-->|Model context / responses| Provider[LLM provider]
+    subgraph Diagram[" "]
+    direction LR
+        Phone["Phone / PWA"]
+
+        subgraph VPS["VPS / HAPI Hub"]
+            direction TB
+            Nginx["Nginx<br/>Public :443"] -->|"Reverse proxy"| Hub["HAPI Hub<br/>127.0.0.1:3006"]
+            Hub --- Store[("Hub SQLite /<br/>session data")]
+        end
+
+        subgraph Host["Runner host"]
+            direction TB
+            subgraph Docker["Docker container (project-scoped)"]
+                direction TB
+                Runner["HAPI Runner"] <--> Agents["Codex / Pi / OpenCode"]
+            end
+            Files["Host project +<br/>per-project agent/HAPI state"]
+            Agents ---|"Bind mounts"| Files
+        end
+
+        Provider["LLM provider"]
+
+        Phone <-->|"HTTPS / WSS :443"| Nginx
+        Hub <-->|"Bidirectional HAPI session sync<br/>Outbound connection initiated by Runner<br/>HTTPS / WSS :443"| Runner
+        Agents <-->|"HTTPS · prompts / context / responses"| Provider
+    end
+
+    classDef component fill:#ffffff,stroke:#7657ff,stroke-width:2px,color:#111827;
+    classDef storage fill:#ffffff,stroke:#7657ff,stroke-width:2px,color:#111827;
+    class Phone,Nginx,Hub,Runner,Agents,Files,Provider component;
+    class Store storage;
+    style VPS fill:#faf9ff,stroke:#7657ff,stroke-width:2px
+    style Host fill:#f8fafc,stroke:#64748b,stroke-width:2px
+    style Docker fill:#f5f3ff,stroke:#7657ff,stroke-width:2px,stroke-dasharray:5 3
+    style Diagram fill:#ffffff,stroke:#ffffff,stroke-width:0px
 ```
 
 Tools run locally; model context goes to the agent's configured provider.
