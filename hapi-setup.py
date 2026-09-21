@@ -50,7 +50,11 @@ def hub_url(value):
 
 
 def request(url, path, *, token=None, body=None, timeout=8):
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "curl/8.0",
+    }
     if token:
         headers["Authorization"] = "Bearer " + token
     req = urllib.request.Request(url + path, headers=headers,
@@ -89,7 +93,7 @@ def setup(path):
     try:
         authenticate(url, token)
     except urllib.error.HTTPError as error:
-        if error.code not in (401, 403) or env_token or not sys.stdin.isatty():
+        if error.code != 401 or env_token or not sys.stdin.isatty():
             raise
         print("Hub rejected the saved/entered token. Enter a replacement (Ctrl-C cancels).", flush=True)
         token = prompt("Hub token: ", secret=True)
