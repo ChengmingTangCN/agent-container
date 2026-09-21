@@ -88,11 +88,12 @@ class NginxRateLimitTests(unittest.TestCase):
                 time.sleep(.05)
         self.fail("Nginx did not start")
 
-    def request(self, method, path):
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=2)
+    def request(self, method, path, body=None):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         try:
-            connection.request(method, path, body="{}" if method == "POST" else None,
-                               headers={"Host": "localhost"})
+            if body is None:
+                body = "{}" if method == "POST" else None
+            connection.request(method, path, body=body, headers={"Host": "localhost"})
             response = connection.getresponse()
             response.read()
             return response.status
@@ -120,6 +121,9 @@ class NginxRateLimitTests(unittest.TestCase):
                 connection.getresponse()
         finally:
             connection.close()
+
+    def test_attachment_sized_bodies_reach_the_backend(self):
+        self.assertEqual(self.request("POST", "/api/sessions", b"x" * (2 * 1024 * 1024)), 200)
 
     def test_access_log_omits_query_credentials(self):
         self.assertEqual(self.request("GET", "/api/events?token=private-test-token"), 200)

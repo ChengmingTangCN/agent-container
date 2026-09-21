@@ -41,6 +41,11 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertIn("return 444;", config)
         self.assertEqual(config.count("default_server"), 4)
 
+    def test_nginx_allows_attachment_sized_bodies_and_caps_auth(self):
+        config = (REPO / "deploy/nginx-hapi.conf").read_text()
+        self.assertIn("client_max_body_size 100m;", config)
+        self.assertIn("client_max_body_size 4k;", config)
+
     def test_vps_removes_the_package_default_site(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
         self.assertIn("rm -f /etc/nginx/sites-enabled/default", script)
