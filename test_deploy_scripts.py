@@ -31,6 +31,20 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertEqual(config.count("server_tokens off;"), 2)
         self.assertNotIn("\nserver_tokens off;", config)
 
+    def test_nginx_only_serves_the_configured_public_host(self):
+        config = (REPO / "deploy/nginx-hapi.conf").read_text()
+        self.assertIn("listen 80 default_server;", config)
+        self.assertIn("listen [::]:80 default_server;", config)
+        self.assertIn("listen 443 ssl default_server;", config)
+        self.assertIn("listen [::]:443 ssl default_server;", config)
+        self.assertIn("ssl_reject_handshake on;", config)
+        self.assertIn("return 444;", config)
+        self.assertEqual(config.count("default_server"), 4)
+
+    def test_vps_removes_the_package_default_site(self):
+        script = (REPO / "deploy/vps-setup.sh").read_text()
+        self.assertIn("rm -f /etc/nginx/sites-enabled/default", script)
+
     def test_hapi_release_binary_is_pinned_and_verified(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
         self.assertIn('HAPI_VERSION="v0.30.7"', script)

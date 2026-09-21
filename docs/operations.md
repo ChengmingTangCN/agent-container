@@ -12,8 +12,12 @@ sudo ./deploy/vps-setup.sh hapi.example.com
 ```
 
 It installs Nginx, TLS, and the unmodified HAPI Hub listening on `127.0.0.1:3006`.
-Systemd restarts the Hub; native Android/iOS push relays are disabled. Certificate
-renewal uses Nginx's ACME webroot and reloads Nginx after successful renewal.
+Only the configured public host is served: the installer removes the distribution's
+default Nginx site, TLS handshakes for any other name (including the bare IP) are
+rejected, and other Host headers receive no response. Nginx 1.19.4 or newer is
+required for that. Systemd restarts the Hub; native Android/iOS push relays are
+disabled. Certificate renewal uses Nginx's ACME webroot and reloads Nginx after
+successful renewal.
 
 | Content | Path |
 | --- | --- |
@@ -26,6 +30,32 @@ HAPI is pinned to the official `v0.30.7` release. The installer selects the
 x86_64 baseline or arm64 archive, verifies its pinned SHA-256 checksum, and
 installs the upstream standalone executable. It does not clone or build HAPI
 and does not install Bun on the VPS.
+
+## Add other services
+
+The installer owns the HTTP(S) entry points: it deletes
+`/etc/nginx/sites-enabled/default` on every run, and its catch-all owns
+`default_server` on 80 and 443, for IPv4 and IPv6. Additional services must not
+take either resource:
+
+- Serve every other service (home page, resume, mail web UI, ...) from a named
+  vhost with an exact `server_name`. Name matches beat the catch-all, so config
+  order does not matter.
+- Never declare `default_server` on 80 or 443, and never enable a site named
+  `default`; one breaks the next deployment with `duplicate default server`, the
+  other gets its link deleted by the installer.
+- Do not edit `/etc/nginx/conf.d/agent-hapi.conf`; the installer rewrites it. Do
+  not reuse its `hapi_`-prefixed map, limit zones, or log names.
+- Unknown names and the bare IP deliberately stay rejected. An exact
+  `server_name <ip>;` vhost can still serve plain HTTP for that IP, but HTTPS by
+  IP cannot work while handshakes for unknown names are rejected.
+- Non-HTTP ports (mail, SSH, ...) are untouched. HAPI's certbot data lives in
+  `/opt/agent-hapi/letsencrypt`; keep other certificates elsewhere.
+
+Redeploying is safe for existing sites: the installer only runs `nginx -t` and a
+graceful `reload`, and it stops Nginx solely to issue its own certificate the
+first time. A broken third-party vhost fails that `nginx -t`, so fix it first;
+the running configuration is left in place.
 
 ## Maintain
 

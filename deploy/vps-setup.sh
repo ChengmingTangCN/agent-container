@@ -47,6 +47,10 @@ else
   exit 2
 fi
 
+# Package-provided default sites own the :80 default_server; the HAPI catch-all
+# must own both defaults so no other Host or SNI is served.
+rm -f /etc/nginx/sites-enabled/default
+
 if ! "$PYTHON_BIN" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))'; then
   echo "Python 3.10 or newer is required" >&2
   exit 2
