@@ -204,7 +204,7 @@ echo "Image:     $IMAGE"
 echo "Mode:      $MODE"
 
 if [[ "$REBUILD" -eq 1 ]] || { [[ "$CONTAINER_EXISTS" -eq 0 ]] && ! docker image inspect "$IMAGE" >/dev/null 2>&1; }; then
-  docker build "${BUILD_OPTIONS[@]}" --network host "${BUILD_PROXY_ARGS[@]}" \
+  DOCKER_BUILDKIT=1 docker build "${BUILD_OPTIONS[@]}" --network host "${BUILD_PROXY_ARGS[@]}" \
     --build-arg UID="$UID_HOST" --build-arg GID="$GID_HOST" -t "$IMAGE" "$SCRIPT_DIR"
 fi
 # Preserve the old container if the replacement image fails to build.
