@@ -26,10 +26,11 @@ successful renewal.
 | Hub environment | `/etc/agent-hapi/hub.env` |
 | HAPI executable | `/opt/agent-hapi/bin/hapi` |
 
-HAPI is pinned to the official `v0.30.7` release. The installer selects the
-x86_64 baseline or arm64 archive, verifies its pinned SHA-256 checksum, and
-installs the upstream standalone executable. It does not clone or build HAPI
-and does not install Bun on the VPS.
+HAPI's version and official release archive checksums are pinned in
+[hapi-release.env](../hapi-release.env). The installer selects the x86_64 baseline
+or arm64 archive, verifies its pinned SHA-256 checksum, and installs the upstream
+standalone executable. It does not clone or build HAPI and does not install Bun
+on the VPS. Keep the version file with the repository when running the installer.
 
 ## Add other services
 
@@ -103,6 +104,52 @@ To import a stopped Hub's data or consistent backup into an empty data directory
 ```bash
 sudo ./deploy/vps-setup.sh --import-hapi-home /path/to/backup hapi.example.com
 ```
+
+## Upgrade HAPI
+
+To select a new release, check the official npm registry's `latest` version and
+confirm that the matching GitHub release archives are available. Update
+`HAPI_VERSION`, `HAPI_SHA256_X64_BASELINE`, and `HAPI_SHA256_ARM64` in
+`hapi-release.env`, using the official archive checksums, then commit the change.
+Store the version without a `v` prefix: npm uses it directly, while the Hub
+installer adds `v` for the GitHub release tag. Deployments use this committed
+version; pulling the commit does not update running processes.
+
+After backing up the Hub as described above, update its checkout and rerun
+`sudo ./deploy/vps-setup.sh hapi.example.com`. The installer compares versions,
+installs the pinned release when needed, and restarts the Hub. Update the Runner
+hosts to the same commit and finish active agent tasks before changing them.
+
+New containers use the pinned version when their image is built. The launcher
+passes `HAPI_VERSION` to Docker; direct Dockerfile builds must supply
+`--build-arg HAPI_VERSION=<version>` too.
+
+To update an existing Runner container while keeping its installed software and
+files, run these commands from the repository on the **Docker host**:
+
+```bash
+source ./hapi-release.env
+CONTAINER_NAME="<container>"
+PROJECT_DIR="/path/to/project"
+docker exec --user dev "$CONTAINER_NAME" npm install -g \
+  --registry=https://registry.npmjs.org "@twsxtd/hapi@$HAPI_VERSION"
+docker stop --time 60 "$CONTAINER_NAME"
+agent-container --hapi "$PROJECT_DIR"
+docker exec --user dev "$CONTAINER_NAME" hapi --version
+```
+
+The container must be running for `docker exec`; start a stopped Runner with
+`agent-container --hapi "$PROJECT_DIR"` first. The final version must match
+`HAPI_VERSION`, and the launcher must report Runner readiness. HAPI can also
+attempt an automatic version handoff that exits the foreground Runner and stops
+the container. If this interrupts installation, start the same container and
+retry the npm command before checking the version.
+
+Stopping and starting the same container preserves its writable layer and
+mounted state, but interrupts running processes. An in-place HAPI update does
+not change the container's original image tag or update other project containers.
+`--rebuild` instead replaces the container and discards software and files in its
+writable layer; reserve it for an intentional replacement.
 
 ## Troubleshoot
 

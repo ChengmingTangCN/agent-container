@@ -9,7 +9,8 @@ REPO = Path(__file__).resolve().parent
 
 class DeploymentScriptTests(unittest.TestCase):
     def test_shell_scripts_parse_and_obsolete_ingress_is_absent(self):
-        scripts = [REPO / "agent-container", *sorted((REPO / "deploy").glob("*.sh"))]
+        scripts = [REPO / "agent-container", REPO / "hapi-release.env",
+                   *sorted((REPO / "deploy").glob("*.sh"))]
         self.assertTrue(scripts)
         for script in scripts:
             with self.subTest(script=script.name):
@@ -52,12 +53,35 @@ class DeploymentScriptTests(unittest.TestCase):
 
     def test_hapi_release_binary_is_pinned_and_verified(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
-        self.assertIn('HAPI_VERSION="v0.30.7"', script)
-        self.assertIn("https://github.com/tiann/hapi/releases/download/", script)
+        self.assertIn('source "$SCRIPT_DIR/../hapi-release.env"', script)
+        self.assertIn('https://github.com/tiann/hapi/releases/download/v${HAPI_VERSION}/', script)
         self.assertIn('echo "$HAPI_ARCHIVE_SHA256  $HAPI_ARCHIVE" | sha256sum -c -', script)
         self.assertIn('tar -xOzf "$HAPI_ARCHIVE" hapi', script)
         self.assertIn('"$HAPI_BIN_TMP" --version', script)
         self.assertFalse((REPO / "deploy/build-hapi.sh").exists())
+
+    def test_image_hapi_install_requires_a_version_and_checks_the_binary(self):
+        dockerfile = (REPO / 'Dockerfile').read_text().replace('\\\n', '')
+        install = next(line.removeprefix('RUN ') for line in dockerfile.splitlines()
+                       if line.startswith('RUN npm i -g --registry=https://registry.npmjs.org '))
+        commands = '''HAPI_VERSION="$1"
+TEST_INSTALLED_VERSION="$2"
+npm() { printf '%s\\n' "$@"; }
+hapi() { printf 'hapi version: %s\\n' "$TEST_INSTALLED_VERSION"; }
+''' + install
+        for requested, installed, success in (
+            ('0.0.1', '0.0.1', True),
+            ('0.0.1', '0.0.2', False),
+            ('', '0.0.1', False),
+        ):
+            with self.subTest(requested=requested, installed=installed):
+                result = subprocess.run(['sh', '-ec', commands, 'test', requested, installed],
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode == 0, success, result.stderr)
+                if requested:
+                    self.assertIn(f'@twsxtd/hapi@{requested}', result.stdout.splitlines())
+                else:
+                    self.assertEqual(result.stdout, '')
 
     def test_vps_import_preserves_existing_hapi_identity(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
@@ -84,12 +108,27 @@ class DeploymentScriptTests(unittest.TestCase):
 
     def test_vps_selects_verified_hapi_archive_for_each_architecture(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
-        self.assertIn("x86_64|amd64)", script)
-        self.assertIn("aarch64|arm64)", script)
-        self.assertIn('HAPI_ARCHIVE_NAME="hapi-linux-x64-baseline.tar.gz"', script)
-        self.assertIn('HAPI_ARCHIVE_NAME="hapi-linux-arm64.tar.gz"', script)
-        self.assertIn("d405bd3e592d6444089884cf5b97640eecfdcd8ad37ab06a8e5611f1811c8a41", script)
-        self.assertIn("4c11ed308412e4510289ed5e5875a43f60f7ee5cee9cbfdc0e2d97f55851a193", script)
+        release = REPO / "hapi-release.env"
+        values = dict(entry.split('=', 1) for entry in shlex.split(release.read_text(), comments=True))
+        self.assertRegex(values['HAPI_VERSION'], r'^\d+\.\d+\.\d+$')
+        start = script.index('case "$(uname -m)" in')
+        selection = script[start:script.index('esac', start) + len('esac')]
+        for arch, target, key in (
+            ('x86_64', 'x64-baseline', 'HAPI_SHA256_X64_BASELINE'),
+            ('amd64', 'x64-baseline', 'HAPI_SHA256_X64_BASELINE'),
+            ('aarch64', 'arm64', 'HAPI_SHA256_ARM64'),
+            ('arm64', 'arm64', 'HAPI_SHA256_ARM64'),
+        ):
+            with self.subTest(arch=arch):
+                self.assertRegex(values[key], r'^[0-9a-f]{64}$')
+                result = subprocess.run([
+                    'bash', '-euc',
+                    'source "$1"\nTEST_ARCH="$2"\nuname() { printf "%s\\n" "$TEST_ARCH"; }\n'
+                    + selection + '\nprintf "%s\\n" "$HAPI_ARCHIVE_NAME" "$HAPI_ARCHIVE_SHA256"',
+                    'test', str(release), arch,
+                ], check=True, text=True, capture_output=True)
+                self.assertEqual(result.stdout.splitlines(),
+                                 [f'hapi-linux-{target}.tar.gz', values[key]])
 
     def test_vps_reloads_an_already_running_nginx(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()

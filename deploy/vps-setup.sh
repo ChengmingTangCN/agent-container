@@ -25,9 +25,9 @@ if [[ ! "$PUBLIC_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ ]] || [[ "$PUBLIC_HO
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../hapi-release.env"
 BASE="/opt/agent-hapi"
 HAPI_BIN="$BASE/bin/hapi"
-HAPI_VERSION="v0.30.7"
 STATE="/var/lib/agent-hapi"
 CONFIG="/etc/agent-hapi"
 SERVICE_USER="agent-hapi"
@@ -59,11 +59,11 @@ fi
 case "$(uname -m)" in
   x86_64|amd64)
     HAPI_ARCHIVE_NAME="hapi-linux-x64-baseline.tar.gz"
-    HAPI_ARCHIVE_SHA256="d405bd3e592d6444089884cf5b97640eecfdcd8ad37ab06a8e5611f1811c8a41"
+    HAPI_ARCHIVE_SHA256="$HAPI_SHA256_X64_BASELINE"
     ;;
   aarch64|arm64)
     HAPI_ARCHIVE_NAME="hapi-linux-arm64.tar.gz"
-    HAPI_ARCHIVE_SHA256="4c11ed308412e4510289ed5e5875a43f60f7ee5cee9cbfdc0e2d97f55851a193"
+    HAPI_ARCHIVE_SHA256="$HAPI_SHA256_ARM64"
     ;;
   *)
     echo "Unsupported architecture: $(uname -m); expected x86_64 or arm64" >&2
@@ -99,7 +99,7 @@ INSTALLED_HAPI_VERSION=""
 if [[ -x "$HAPI_BIN" ]]; then
   INSTALLED_HAPI_VERSION="$("$HAPI_BIN" --version 2>/dev/null || true)"
 fi
-if [[ "$INSTALLED_HAPI_VERSION" != "hapi version: ${HAPI_VERSION#v}" ]]; then
+if [[ "$INSTALLED_HAPI_VERSION" != "hapi version: $HAPI_VERSION" ]]; then
   HAPI_ARCHIVE=""
   HAPI_BIN_TMP=""
   cleanup_hapi_download() {
@@ -110,11 +110,11 @@ if [[ "$INSTALLED_HAPI_VERSION" != "hapi version: ${HAPI_VERSION#v}" ]]; then
   HAPI_ARCHIVE="$(mktemp)"
   HAPI_BIN_TMP="$(mktemp -p "$BASE/bin" .hapi.XXXXXX)"
   curl -fsSL --retry 3 -o "$HAPI_ARCHIVE" \
-    "https://github.com/tiann/hapi/releases/download/$HAPI_VERSION/$HAPI_ARCHIVE_NAME"
+    "https://github.com/tiann/hapi/releases/download/v${HAPI_VERSION}/$HAPI_ARCHIVE_NAME"
   echo "$HAPI_ARCHIVE_SHA256  $HAPI_ARCHIVE" | sha256sum -c -
   tar -xOzf "$HAPI_ARCHIVE" hapi > "$HAPI_BIN_TMP"
   chmod 755 "$HAPI_BIN_TMP"
-  [[ "$("$HAPI_BIN_TMP" --version)" == "hapi version: ${HAPI_VERSION#v}" ]] || {
+  [[ "$("$HAPI_BIN_TMP" --version)" == "hapi version: $HAPI_VERSION" ]] || {
     echo "Downloaded HAPI binary has an unexpected version" >&2
     exit 1
   }

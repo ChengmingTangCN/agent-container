@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -64,12 +65,13 @@ class LauncherTests(unittest.TestCase):
                         LAUNCHER_TEST_CALLS=str(self.calls_path),
                         LAUNCHER_TEST_CONFIG=str(self.config_path))
         self.env.pop('HAPI_API_URL', None)
+        self.launcher = REPO / 'agent-container'
 
     def configure(self, **values):
         self.config_path.write_text(json.dumps({'project': str(self.project), **values}))
 
     def launch(self, *options, project=None):
-        return subprocess.run(['bash', str(REPO / 'agent-container'), *options,
+        return subprocess.run(['bash', str(self.launcher), *options,
                                str(project or self.project)], env=self.env,
                               text=True, capture_output=True, timeout=10)
 
@@ -85,6 +87,83 @@ class LauncherTests(unittest.TestCase):
         settings = directory / 'settings.json'
         settings.write_text('{"cliApiToken":"dummy-token","machineId":"project-a"}')
         return settings
+
+    def release_fixture(self, version, name='checkout'):
+        for name_var in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'):
+            self.env.pop(name_var, None)
+            self.env.pop(name_var.lower(), None)
+        checkout = self.base / name
+        checkout.mkdir(exist_ok=True)
+        for filename in ('agent-container', 'Dockerfile', 'hapi-setup.py'):
+            shutil.copyfile(REPO / filename, checkout / filename)
+        release = checkout / 'hapi-release.env'
+        release.write_text(f'HAPI_VERSION="{version}"\n')
+        self.launcher = checkout / 'agent-container'
+        return release
+
+    def test_release_change_builds_a_new_image_for_the_same_container(self):
+        release = self.release_fixture('0.0.1')
+        self.configure(image_exists=False)
+        self.assertEqual(self.launch().returncode, 0)
+        first_build = next(call for call in self.calls() if call[0] == 'build')
+        first_run = self.run_args()
+        self.assertIn('HAPI_VERSION=0.0.1', first_build)
+
+        release.write_text('HAPI_VERSION="0.0.2"\n')
+        self.calls_path.write_text('')
+        self.assertEqual(self.launch().returncode, 0)
+        second_build = next(call for call in self.calls() if call[0] == 'build')
+        second_run = self.run_args()
+        self.assertIn('HAPI_VERSION=0.0.2', second_build)
+        self.assertNotEqual(first_build[first_build.index('-t') + 1],
+                            second_build[second_build.index('-t') + 1])
+        self.assertEqual(first_run[first_run.index('--name') + 1],
+                         second_run[second_run.index('--name') + 1])
+
+    def test_image_is_shared_across_projects_and_checkout_paths(self):
+        self.release_fixture('0.0.1')
+        self.configure(image_exists=False)
+        self.assertEqual(self.launch().returncode, 0)
+        first_build = next(call for call in self.calls() if call[0] == 'build')
+        first_run = self.run_args()
+
+        release = self.release_fixture('0.0.1', 'another checkout')
+        with release.open('a') as out:
+            out.write('# Hub-only checksum changes do not affect the image.\n'
+                      'HAPI_SHA256_ARM64="' + 'a' * 64 + '"\n')
+        project = self.base / 'projects' / 'another project'
+        project.mkdir()
+        self.calls_path.write_text('')
+        self.assertEqual(self.launch(project=project).returncode, 0)
+        second_build = next(call for call in self.calls() if call[0] == 'build')
+        second_run = self.run_args()
+        self.assertEqual(first_build[first_build.index('-t') + 1],
+                         second_build[second_build.index('-t') + 1])
+        self.assertNotEqual(first_run[first_run.index('--name') + 1],
+                            second_run[second_run.index('--name') + 1])
+
+    def test_release_change_does_not_replace_an_existing_runner(self):
+        release = self.release_fixture('0.0.1')
+        settings = self.login_fixture()
+        original = settings.read_text()
+        self.configure(image_exists=False)
+        self.assertEqual(self.launch('--hapi').returncode, 0)
+        build = next(call for call in self.calls() if call[0] == 'build')
+        image = build[build.index('-t') + 1]
+
+        release.write_text('HAPI_VERSION="0.0.2"\n')
+        for running in (True, False):
+            with self.subTest(running=running):
+                self.configure(exists=True, mode='hapi', running=running,
+                               image=image, image_exists=False)
+                self.calls_path.write_text('')
+                result = self.launch('--hapi')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(any(call[0] in ('build', 'rm', 'run')
+                                     for call in self.calls()))
+                self.assertNotIn('--rebuild', result.stderr)
+                self.assertIn('different build configuration', result.stderr)
+                self.assertEqual(settings.read_text(), original)
 
     def test_interactive_mounts_only_current_project_and_its_state(self):
         (self.home / '.gitconfig').write_text('[user]\nname = Test\n')

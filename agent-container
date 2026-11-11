@@ -67,12 +67,13 @@ done
 
 DOCKERFILE="$SCRIPT_DIR/Dockerfile"
 [[ -f "$DOCKERFILE" ]] || { echo "Dockerfile not found: $DOCKERFILE" >&2; exit 1; }
+source "$SCRIPT_DIR/hapi-release.env"
 UID_HOST="$(id -u)"
 GID_HOST="$(id -g)"
 PROJECT_NAME="$(basename "$PROJECT")"
 PROJECT_HASH="$(printf '%s' "$PROJECT" | sha1sum | cut -c1-8)"
 PROJECT_SLUG="$(printf '%s' "$PROJECT_NAME" | LC_ALL=C sed -E 's/[^A-Za-z0-9_.-]+/-/g' | cut -c1-48)"
-IMAGE_REVISION="$(sha256sum "$DOCKERFILE" | cut -c1-12)"
+IMAGE_REVISION="$({ cat "$DOCKERFILE"; printf '\nHAPI_VERSION=%s\n' "$HAPI_VERSION"; } | sha256sum | cut -c1-12)"
 IMAGE="agent-container:${IMAGE_REVISION}-uid-${UID_HOST}-gid-${GID_HOST}"
 CONTAINER_NAME="agent-${PROJECT_SLUG:-project}-${PROJECT_HASH}"
 WORKDIR_IN_CONTAINER="/work/$PROJECT_NAME"
@@ -205,7 +206,8 @@ echo "Mode:      $MODE"
 
 if [[ "$REBUILD" -eq 1 ]] || { [[ "$CONTAINER_EXISTS" -eq 0 ]] && ! docker image inspect "$IMAGE" >/dev/null 2>&1; }; then
   DOCKER_BUILDKIT=1 docker build "${BUILD_OPTIONS[@]}" --network host "${BUILD_PROXY_ARGS[@]}" \
-    --build-arg UID="$UID_HOST" --build-arg GID="$GID_HOST" -t "$IMAGE" "$SCRIPT_DIR"
+    --build-arg UID="$UID_HOST" --build-arg GID="$GID_HOST" \
+    --build-arg HAPI_VERSION="$HAPI_VERSION" -t "$IMAGE" "$SCRIPT_DIR"
 fi
 # Preserve the old container if the replacement image fails to build.
 if [[ "$REBUILD" -eq 1 && "$CONTAINER_EXISTS" -eq 1 ]]; then
@@ -219,7 +221,8 @@ if [[ "$CONTAINER_EXISTS" -eq 1 ]]; then
   fi
   CURRENT_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER_NAME")"
   if [[ "$CURRENT_IMAGE" != "$IMAGE" ]]; then
-    echo "Existing container uses an older image. Use --rebuild to replace it." >&2
+    echo "Existing container was created from a different build configuration; reusing it." >&2
+    echo "For an in-place HAPI update, see docs/operations.md#upgrade-hapi." >&2
   fi
   RUNNING="$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME")"
   if [[ "$HAPI_RUNNER" -eq 1 ]]; then

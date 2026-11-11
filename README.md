@@ -128,6 +128,13 @@ Runner restart policy. To change modes or environment, finish sessions and remov
 the container first. Mounted files survive removal; installations in its writable
 layer do not. `--rebuild` interrupts running tasks after the image build succeeds.
 
+The HAPI release is pinned in [hapi-release.env](hapi-release.env) for both image
+builds and the VPS installer. Image tags depend on Dockerfile contents, the HAPI
+version, and the host UID/GID; projects with the same inputs share an image.
+Existing containers are reused even when those build inputs change. See
+[Upgrade HAPI](docs/operations.md#upgrade-hapi) to update HAPI in place while
+keeping an existing container's installed software and files.
+
 ## State
 
 | Data | Location |

@@ -97,7 +97,9 @@ RUN set -eux; \
     npm --version
 
 RUN npm i -g --registry=https://registry.npmmirror.com @openai/codex opencode-ai@latest @earendil-works/pi-coding-agent
-RUN npm i -g --registry=https://registry.npmjs.org @twsxtd/hapi@0.30.7
+ARG HAPI_VERSION
+RUN npm i -g --registry=https://registry.npmjs.org "@twsxtd/hapi@${HAPI_VERSION:?HAPI_VERSION build argument is required}" \
+ && test "$(hapi --version)" = "hapi version: ${HAPI_VERSION}"
 
 WORKDIR /work
 
