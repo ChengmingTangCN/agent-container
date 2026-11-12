@@ -3,6 +3,7 @@
 set -Eeuo pipefail
 
 IMPORT_HAPI_HOME=""
+LOCAL_HAPI_ARCHIVE=""
 while [[ $# -gt 1 ]]; do
   case "$1" in
     --import-hapi-home)
@@ -10,17 +11,27 @@ while [[ $# -gt 1 ]]; do
       IMPORT_HAPI_HOME="$2"
       shift 2
       ;;
+    --hapi-archive)
+      [[ $# -ge 3 && -n "$2" ]] || break
+      LOCAL_HAPI_ARCHIVE="$2"
+      shift 2
+      ;;
     *) break ;;
   esac
 done
 if [[ "$(id -u)" != 0 ]] || [[ $# != 1 ]]; then
-  echo "Usage: sudo bash vps-setup.sh [--import-hapi-home <directory>] <public-ip-or-domain>" >&2
+  echo "Usage: sudo bash vps-setup.sh [--import-hapi-home <directory>] [--hapi-archive <file>] <public-ip-or-domain>" >&2
   exit 2
 fi
 
 PUBLIC_HOST="$1"
 if [[ ! "$PUBLIC_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ ]] || [[ "$PUBLIC_HOST" == *..* ]]; then
   echo "public host must be an IPv4 address or DNS name without a port or path" >&2
+  exit 2
+fi
+
+if [[ -n "$LOCAL_HAPI_ARCHIVE" && ( ! -f "$LOCAL_HAPI_ARCHIVE" || ! -r "$LOCAL_HAPI_ARCHIVE" ) ]]; then
+  echo "--hapi-archive must point to a readable archive file" >&2
   exit 2
 fi
 
@@ -145,10 +156,15 @@ if [[ "$INSTALLED_HAPI_VERSION" != "hapi version: $HAPI_VERSION" ]]; then
   trap cleanup_hapi_download EXIT
   HAPI_ARCHIVE="$(mktemp)"
   HAPI_BIN_TMP="$(mktemp -p "$BASE/bin" .hapi.XXXXXX)"
-  echo "Downloading $HAPI_ARCHIVE_NAME for HAPI $HAPI_VERSION from GitHub"
-  curl --fail --show-error --location --progress-bar \
-    --connect-timeout 15 --speed-limit 1024 --speed-time 60 --retry 3 -o "$HAPI_ARCHIVE" \
-    "https://github.com/tiann/hapi/releases/download/v${HAPI_VERSION}/$HAPI_ARCHIVE_NAME"
+  if [[ -n "$LOCAL_HAPI_ARCHIVE" ]]; then
+    echo "Using local HAPI archive: $LOCAL_HAPI_ARCHIVE"
+    cp -- "$LOCAL_HAPI_ARCHIVE" "$HAPI_ARCHIVE"
+  else
+    echo "Downloading $HAPI_ARCHIVE_NAME for HAPI $HAPI_VERSION from GitHub"
+    curl --fail --show-error --location --progress-bar \
+      --connect-timeout 15 --speed-limit 1024 --speed-time 60 --retry 3 -o "$HAPI_ARCHIVE" \
+      "https://github.com/tiann/hapi/releases/download/v${HAPI_VERSION}/$HAPI_ARCHIVE_NAME"
+  fi
   echo "Verifying archive checksum and extracting HAPI"
   echo "$HAPI_ARCHIVE_SHA256  $HAPI_ARCHIVE" | sha256sum -c -
   tar -xOzf "$HAPI_ARCHIVE" hapi > "$HAPI_BIN_TMP"

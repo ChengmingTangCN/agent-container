@@ -1,5 +1,9 @@
+import hashlib
+import io
 import shlex
 import subprocess
+import tarfile
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -59,6 +63,105 @@ class DeploymentScriptTests(unittest.TestCase):
         self.assertIn('tar -xOzf "$HAPI_ARCHIVE" hapi', script)
         self.assertIn('"$HAPI_BIN_TMP" --version', script)
         self.assertFalse((REPO / "deploy/build-hapi.sh").exists())
+
+    def test_vps_local_archive_argument(self):
+        script = (REPO / 'deploy/vps-setup.sh').read_text()
+        arguments = script[:script.index('SCRIPT_DIR=')]
+        commands = 'id() { printf "0\\n"; }\n' + arguments + '''
+printf '%s\\n' "$LOCAL_HAPI_ARCHIVE" "$IMPORT_HAPI_HOME" "$PUBLIC_HOST"
+'''
+        with tempfile.TemporaryDirectory(prefix='hapi-archive-args-') as directory:
+            archive = Path(directory) / 'release with spaces.tar.gz'
+            archive.write_bytes(b'argument parsing fixture')
+            for options, local, imported in (
+                ([], '', ''),
+                (['--hapi-archive', str(archive)], str(archive), ''),
+                (['--hapi-archive', str(archive), '--import-hapi-home', '/tmp/old data'],
+                 str(archive), '/tmp/old data'),
+                (['--import-hapi-home', '/tmp/old data', '--hapi-archive', str(archive)],
+                 str(archive), '/tmp/old data'),
+            ):
+                with self.subTest(options=options):
+                    result = subprocess.run(
+                        ['bash', '-Eeuc', commands, 'test', *options, 'hapi.example.com'],
+                        text=True, capture_output=True, timeout=5)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.splitlines(), [local, imported, 'hapi.example.com'])
+            for options in (
+                ['--hapi-archive', str(archive) + '.missing', 'hapi.example.com'],
+                ['--hapi-archive', directory, 'hapi.example.com'],
+                ['--hapi-archive', '', 'hapi.example.com'],
+                ['--hapi-archive', 'hapi.example.com'],
+                ['--hapi-archive'],
+            ):
+                with self.subTest(options=options):
+                    result = subprocess.run(
+                        ['bash', '-Eeuc', commands, 'test', *options],
+                        text=True, capture_output=True, timeout=5)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertTrue(result.stderr)
+
+    def test_vps_archive_installation_preserves_input_and_checks_release(self):
+        script = (REPO / 'deploy/vps-setup.sh').read_text()
+        progress = script[script.index('STEP=0'):script.index('step "Check system dependencies"')]
+        installation = script[script.index('step "Check HAPI $HAPI_VERSION installation"'):
+                              script.index('step "Configure Hub credentials and systemd service"')]
+        setup = r'''
+BASE="$1"
+HAPI_BIN="$BASE/bin/hapi"
+TEST_ARCHIVE="$2"
+LOCAL_HAPI_ARCHIVE="$3"
+HAPI_ARCHIVE_SHA256="$4"
+HAPI_VERSION=0.0.2
+HAPI_ARCHIVE_NAME=hapi-linux-x64-baseline.tar.gz
+export TMPDIR="$BASE/tmp"
+curl() {
+  echo "DOWNLOAD"
+  cp -- "$TEST_ARCHIVE" "$HAPI_ARCHIVE"
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='hapi-archive-install-') as directory:
+            for mode in ('download', 'local', 'first_install', 'installed',
+                         'checksum_mismatch', 'version_mismatch'):
+                with self.subTest(mode=mode):
+                    base = Path(directory) / mode
+                    (base / 'bin').mkdir(parents=True)
+                    (base / 'tmp').mkdir()
+                    binary = base / 'bin/hapi'
+                    installed_version = '0.0.2' if mode == 'installed' else '0.0.1'
+                    original = f'#!/bin/sh\nprintf "hapi version: {installed_version}\\n"\n'.encode()
+                    if mode != 'first_install':
+                        binary.write_bytes(original)
+                        binary.chmod(0o755)
+                    archive_version = '0.0.3' if mode == 'version_mismatch' else '0.0.2'
+                    payload = f'#!/bin/sh\nprintf "hapi version: {archive_version}\\n"\n'.encode()
+                    archive = base / 'release with spaces.tar.gz'
+                    with tarfile.open(archive, 'w:gz') as output:
+                        member = tarfile.TarInfo('hapi')
+                        member.mode = 0o755
+                        member.size = len(payload)
+                        output.addfile(member, io.BytesIO(payload))
+                    archive_bytes = archive.read_bytes()
+                    checksum = hashlib.sha256(archive_bytes).hexdigest()
+                    if mode == 'checksum_mismatch':
+                        checksum = '0' * 64
+                    result = subprocess.run(
+                        ['bash', '-Eeuc', progress + setup + installation, 'test',
+                         str(base), str(archive), '' if mode == 'download' else str(archive),
+                         checksum], text=True, capture_output=True, timeout=5)
+                    failed = mode in ('checksum_mismatch', 'version_mismatch')
+                    self.assertEqual(result.returncode != 0, failed, result.stdout + result.stderr)
+                    self.assertEqual(binary.read_bytes(), original if failed else payload)
+                    self.assertEqual(archive.read_bytes(), archive_bytes)
+                    self.assertEqual(list((base / 'tmp').iterdir()), [])
+                    self.assertEqual(list((base / 'bin').iterdir()), [binary])
+                    self.assertEqual('DOWNLOAD' in result.stdout, mode == 'download')
+                    if mode == 'installed':
+                        self.assertIn('already installed', result.stdout)
+                    if mode == 'checksum_mismatch':
+                        self.assertIn('did NOT match', result.stderr)
+                    if mode == 'version_mismatch':
+                        self.assertIn('unexpected version', result.stderr)
 
     def test_image_hapi_install_requires_a_version_and_checks_the_binary(self):
         dockerfile = (REPO / 'Dockerfile').read_text().replace('\\\n', '')

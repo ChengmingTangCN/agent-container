@@ -32,6 +32,22 @@ or arm64 archive, verifies its pinned SHA-256 checksum, and installs the upstrea
 standalone executable. It does not clone or build HAPI and does not install Bun
 on the VPS. Keep the version file with the repository when running the installer.
 
+If the VPS cannot reach GitHub, download the official archive on another machine
+and copy it to the VPS. Pass its local path before the public host:
+
+```bash
+sudo ./deploy/vps-setup.sh \
+  --hapi-archive /path/to/hapi-linux-x64-baseline.tar.gz hapi.example.com
+```
+
+Use `hapi-linux-arm64.tar.gz` for an arm64 VPS. The archive must match the version
+and architecture checksum pinned in `hapi-release.env`; version verification
+still runs before replacing the binary. The supplied file is preserved. If the
+pinned HAPI version is already installed, installation is skipped as usual.
+This option can be combined with `--import-hapi-home`. It bypasses only the HAPI
+download; missing system packages, Certbot, and certificate issuance still need
+their normal network access.
+
 The installer checks package installation state with `dpkg-query` or `rpm` and
 installs only missing dependencies. When all dependencies are present, it skips
 package-manager commands, including `apt-get update`.
