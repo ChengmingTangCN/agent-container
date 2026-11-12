@@ -32,6 +32,17 @@ or arm64 archive, verifies its pinned SHA-256 checksum, and installs the upstrea
 standalone executable. It does not clone or build HAPI and does not install Bun
 on the VPS. Keep the version file with the repository when running the installer.
 
+The installer checks package installation state with `dpkg-query` or `rpm` and
+installs only missing dependencies. When all dependencies are present, it skips
+package-manager commands, including `apt-get update`.
+
+Each installation stage prints a numbered status line, including skipped HAPI
+downloads and certificate setup. HAPI downloads show a progress bar, allow 15
+seconds to connect, and abort a transfer that stays below 1 KiB/s for 60 seconds;
+eligible failures are retried up to three times. The final health check reports
+its attempts and prints a `journalctl` command on failure. For a silent wait,
+use the last stage line to identify the operation still in progress.
+
 ## Add other services
 
 The installer owns the HTTP(S) entry points: it deletes

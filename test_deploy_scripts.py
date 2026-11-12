@@ -106,6 +106,93 @@ hapi() { printf 'hapi version: %s\\n' "$TEST_INSTALLED_VERSION"; }
         self.assertIn('"$PYTHON_BIN" -m venv', script)
         self.assertNotIn("requires a dnf-based VPS", script)
 
+    def test_vps_installs_only_missing_packages(self):
+        script = (REPO / 'deploy/vps-setup.sh').read_text()
+        dependencies = script[script.index('STEP=0'):script.index('# Package-provided default sites')]
+        stubs = r'''
+TEST_MANAGER="$1"
+TEST_MISSING="$2"
+TEST_DPKG_STATUS="$3"
+TEST_INSTALL_EXIT="$4"
+command() {
+  case "$2" in
+    apt-get|dnf) [[ "$2" == "$TEST_MANAGER" ]] ;;
+    systemctl|python3|python3.11) printf '/test/%s\n' "$2" ;;
+    *) return 1 ;;
+  esac
+}
+dpkg-query() {
+  if [[ " $TEST_MISSING " == *" ${!#} "* ]]; then
+    printf '%s' "$TEST_DPKG_STATUS"
+    [[ -n "$TEST_DPKG_STATUS" ]]
+  else
+    printf installed
+  fi
+}
+rpm() { [[ " $TEST_MISSING " != *" ${!#} "* ]]; }
+apt-get() {
+  printf 'CALL apt-get %s\n' "$*"
+  [[ "$1" != install ]] || return "$TEST_INSTALL_EXIT"
+}
+dnf() { printf 'CALL dnf %s\n' "$*"; return "$TEST_INSTALL_EXIT"; }
+'''
+        for manager, missing, status, install_exit, expected in (
+            ('apt-get', '', '', 0, []),
+            ('apt-get', 'curl nginx', '', 0,
+             ['CALL apt-get update', 'CALL apt-get install -y curl nginx']),
+            ('apt-get', 'nginx', 'config-files', 0,
+             ['CALL apt-get update', 'CALL apt-get install -y nginx']),
+            ('dnf', '', '', 0, []),
+            ('dnf', 'curl python3.11-pip', '', 0,
+             ['CALL dnf install -y curl python3.11-pip']),
+            ('apt-get', 'curl', '', 23,
+             ['CALL apt-get update', 'CALL apt-get install -y curl']),
+            ('dnf', 'curl', '', 23, ['CALL dnf install -y curl']),
+        ):
+            with self.subTest(manager=manager, missing=missing, status=status, exit=install_exit):
+                result = subprocess.run(
+                    ['bash', '-Eeuc', stubs + dependencies, 'test', manager, missing,
+                     status, str(install_exit)], text=True, capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, install_exit, result.stderr)
+                calls = [line for line in result.stdout.splitlines() if line.startswith('CALL ')]
+                self.assertEqual(calls, expected)
+                self.assertIn('Check system dependencies', result.stdout)
+                self.assertIn(f'Package manager: {manager}', result.stdout)
+                if not missing:
+                    self.assertIn('skipping', result.stdout)
+                if install_exit:
+                    self.assertIn('Failed during: Check system dependencies', result.stderr)
+                    self.assertIn('exit 23', result.stderr)
+
+    def test_vps_health_check_reports_waits_and_failure(self):
+        script = (REPO / 'deploy/vps-setup.sh').read_text()
+        progress = script[script.index('STEP=0'):script.index('step "Check system dependencies"')]
+        health = script[script.index('step "Wait for HAPI health check"'):script.index('echo "HAPI is ready')]
+        stubs = r'''
+TEST_READY_AFTER="$1"
+TEST_CALLS=0
+curl() {
+  TEST_CALLS=$((TEST_CALLS + 1))
+  [[ "$TEST_CALLS" -ge "$TEST_READY_AFTER" ]]
+}
+sleep() { :; }
+systemctl() { printf 'SERVICE %s\n' "$*"; }
+'''
+        for ready_after in (1, 3, 31):
+            with self.subTest(ready_after=ready_after):
+                result = subprocess.run(
+                    ['bash', '-Eeuc', progress + stubs + health, 'test', str(ready_after)],
+                    text=True, capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, int(ready_after > 30), result.stderr)
+                self.assertIn('Wait for HAPI health check', result.stdout)
+                self.assertEqual(result.stdout.count('Waiting for HAPI to become ready'),
+                                 min(ready_after - 1, 30))
+                if ready_after > 30:
+                    self.assertIn('journalctl -u agent-hapi-hub.service', result.stderr)
+                    self.assertNotIn('SERVICE ', result.stdout)
+                else:
+                    self.assertIn('SERVICE is-active agent-hapi-hub.service', result.stdout)
+
     def test_vps_selects_verified_hapi_archive_for_each_architecture(self):
         script = (REPO / "deploy/vps-setup.sh").read_text()
         release = REPO / "hapi-release.env"
@@ -134,7 +221,7 @@ hapi() { printf 'hapi version: %s\\n' "$TEST_INSTALLED_VERSION"; }
         script = (REPO / "deploy/vps-setup.sh").read_text()
         enable = script.index("systemctl enable --now")
         reload = script.index("systemctl reload nginx", enable)
-        health_check = script.index("for _ in {1..30}")
+        health_check = script.index('step "Wait for HAPI health check"')
         self.assertLess(enable, reload)
         self.assertLess(reload, health_check)
 
@@ -142,7 +229,7 @@ hapi() { printf 'hapi version: %s\\n' "$TEST_INSTALLED_VERSION"; }
         script = (REPO / "deploy/vps-setup.sh").read_text()
         enable = script.index("systemctl enable --now")
         restart = script.index("systemctl restart agent-hapi-hub.service", enable)
-        health_check = script.index("for _ in {1..30}")
+        health_check = script.index('step "Wait for HAPI health check"')
         self.assertLess(enable, restart)
         self.assertLess(restart, health_check)
 

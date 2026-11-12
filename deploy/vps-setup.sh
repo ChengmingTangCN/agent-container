@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install the unmodified upstream HAPI Hub on the VPS.
-set -euo pipefail
+set -Eeuo pipefail
 
 IMPORT_HAPI_HOME=""
 while [[ $# -gt 1 ]]; do
@@ -33,14 +33,47 @@ CONFIG="/etc/agent-hapi"
 SERVICE_USER="agent-hapi"
 PUBLIC_URL="https://$PUBLIC_HOST"
 
+STEP=0
+CURRENT_STEP="Initialize installer"
+step() {
+  STEP=$((STEP + 1))
+  CURRENT_STEP="$1"
+  printf '\n[%d/9] %s\n' "$STEP" "$CURRENT_STEP"
+}
+trap 'status=$?; printf "\nFailed during: %s (line %s, exit %s)\n" "$CURRENT_STEP" "$LINENO" "$status" >&2; exit "$status"' ERR
+
+step "Check system dependencies"
 command -v systemctl >/dev/null || { echo "This installer requires systemd" >&2; exit 2; }
+MISSING_PACKAGES=()
 if command -v apt-get >/dev/null; then
+  echo "Package manager: apt-get"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update
-  apt-get install -y ca-certificates curl gzip nginx python3 python3-pip python3-venv tar
+  for package in ca-certificates curl gzip nginx python3 python3-pip python3-venv tar; do
+    if [[ "$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null)" != installed ]]; then
+      MISSING_PACKAGES+=("$package")
+    fi
+  done
+  if [[ ${#MISSING_PACKAGES[@]} -gt 0 ]]; then
+    echo "Installing missing packages: ${MISSING_PACKAGES[*]}"
+    apt-get update
+    apt-get install -y "${MISSING_PACKAGES[@]}"
+  else
+    echo "All required packages are installed; skipping apt-get update/install."
+  fi
   PYTHON_BIN="$(command -v python3)"
 elif command -v dnf >/dev/null; then
-  dnf install -y ca-certificates curl gzip nginx python3.11 python3.11-pip tar
+  echo "Package manager: dnf"
+  for package in ca-certificates curl gzip nginx python3.11 python3.11-pip tar; do
+    if ! rpm -q "$package" >/dev/null 2>&1; then
+      MISSING_PACKAGES+=("$package")
+    fi
+  done
+  if [[ ${#MISSING_PACKAGES[@]} -gt 0 ]]; then
+    echo "Installing missing packages: ${MISSING_PACKAGES[*]}"
+    dnf install -y "${MISSING_PACKAGES[@]}"
+  else
+    echo "All required packages are installed; skipping dnf install."
+  fi
   PYTHON_BIN="$(command -v python3.11)"
 else
   echo "This installer supports apt-get or dnf package management" >&2
@@ -71,6 +104,7 @@ case "$(uname -m)" in
     ;;
 esac
 
+step "Prepare Hub data directories and permissions"
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home-dir "$STATE" --create-home --shell /sbin/nologin "$SERVICE_USER"
 fi
@@ -82,6 +116,7 @@ install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 700 \
 chown -R "$SERVICE_USER:$SERVICE_USER" "$STATE/hapi"
 
 if [[ -n "$IMPORT_HAPI_HOME" ]]; then
+  echo "Importing HAPI data into $STATE/hapi"
   if [[ ! -d "$IMPORT_HAPI_HOME" ]]; then
     echo "Imported HAPI home must be an existing directory" >&2
     exit 2
@@ -95,6 +130,7 @@ if [[ -n "$IMPORT_HAPI_HOME" ]]; then
   chmod 700 "$STATE/hapi"
 fi
 
+step "Check HAPI $HAPI_VERSION installation"
 INSTALLED_HAPI_VERSION=""
 if [[ -x "$HAPI_BIN" ]]; then
   INSTALLED_HAPI_VERSION="$("$HAPI_BIN" --version 2>/dev/null || true)"
@@ -109,18 +145,26 @@ if [[ "$INSTALLED_HAPI_VERSION" != "hapi version: $HAPI_VERSION" ]]; then
   trap cleanup_hapi_download EXIT
   HAPI_ARCHIVE="$(mktemp)"
   HAPI_BIN_TMP="$(mktemp -p "$BASE/bin" .hapi.XXXXXX)"
-  curl -fsSL --retry 3 -o "$HAPI_ARCHIVE" \
+  echo "Downloading $HAPI_ARCHIVE_NAME for HAPI $HAPI_VERSION from GitHub"
+  curl --fail --show-error --location --progress-bar \
+    --connect-timeout 15 --speed-limit 1024 --speed-time 60 --retry 3 -o "$HAPI_ARCHIVE" \
     "https://github.com/tiann/hapi/releases/download/v${HAPI_VERSION}/$HAPI_ARCHIVE_NAME"
+  echo "Verifying archive checksum and extracting HAPI"
   echo "$HAPI_ARCHIVE_SHA256  $HAPI_ARCHIVE" | sha256sum -c -
   tar -xOzf "$HAPI_ARCHIVE" hapi > "$HAPI_BIN_TMP"
   chmod 755 "$HAPI_BIN_TMP"
+  echo "Checking downloaded HAPI version"
   [[ "$("$HAPI_BIN_TMP" --version)" == "hapi version: $HAPI_VERSION" ]] || {
     echo "Downloaded HAPI binary has an unexpected version" >&2
     exit 1
   }
   mv -f -- "$HAPI_BIN_TMP" "$HAPI_BIN"
+  echo "Installed HAPI $HAPI_VERSION"
+else
+  echo "HAPI $HAPI_VERSION is already installed; skipping download."
 fi
 
+step "Configure Hub credentials and systemd service"
 HAPI_TOKEN_FILE="$CONFIG/hapi-access-token"
 if [[ ! -s "$HAPI_TOKEN_FILE" ]]; then
   "$PYTHON_BIN" - "$HAPI_TOKEN_FILE" "$STATE/hapi/settings.json" <<'PY'
@@ -189,14 +233,20 @@ if [[ -f /etc/systemd/system/codex-control-coordinator.service ]]; then
   rm /etc/systemd/system/codex-control-coordinator.service
 fi
 
+step "Check Certbot installation"
 CERTBOT="$BASE/certbot/bin/certbot"
 if [[ ! -x "$CERTBOT" ]]; then
+  echo "Creating Certbot environment and installing certbot==5.8.0"
   "$PYTHON_BIN" -m venv "$BASE/certbot"
   "$BASE/certbot/bin/pip" install 'certbot==5.8.0'
+else
+  echo "Certbot is already installed; skipping installation."
 fi
+step "Check TLS certificate"
 CERT_ARGS=(--config-dir "$BASE/letsencrypt" --work-dir "$BASE/letsencrypt-work" --logs-dir "$BASE/letsencrypt-logs")
 CERT_DIR="$BASE/letsencrypt/live/$PUBLIC_HOST"
 if [[ ! -f "$CERT_DIR/fullchain.pem" ]]; then
+  echo "Requesting a TLS certificate with Certbot"
   systemctl stop nginx 2>/dev/null || true
   if "$PYTHON_BIN" - "$PUBLIC_HOST" <<'PY'
 import ipaddress, sys
@@ -210,8 +260,11 @@ PY
     "$CERTBOT" certonly --non-interactive --agree-tos --register-unsafely-without-email \
       --standalone -d "$PUBLIC_HOST" --cert-name "$PUBLIC_HOST" "${CERT_ARGS[@]}"
   fi
+else
+  echo "TLS certificate already exists; skipping certificate issuance."
 fi
 
+step "Configure Nginx and certificate renewal"
 "$PYTHON_BIN" - "$SCRIPT_DIR/nginx-hapi.conf" /etc/nginx/conf.d/agent-hapi.conf \
   "$PUBLIC_HOST" "$CERT_DIR" <<'PY'
 import sys
@@ -242,18 +295,31 @@ Persistent=true
 WantedBy=timers.target
 EOF_TIMER
 
+step "Validate configuration and restart services"
 nginx -t
 systemctl daemon-reload
+echo "Enabling Hub, Nginx, and certificate renewal"
 systemctl enable --now agent-hapi-hub.service nginx \
   agent-hapi-cert-renew.timer
+echo "Restarting HAPI Hub"
 systemctl restart agent-hapi-hub.service
+echo "Reloading Nginx"
 systemctl reload nginx
 
-for _ in {1..30}; do
-  if curl -fsS http://127.0.0.1:3006/health >/dev/null; then break; fi
+step "Wait for HAPI health check"
+HAPI_HEALTHY=0
+for attempt in {1..30}; do
+  if curl -fsS --connect-timeout 2 --max-time 5 http://127.0.0.1:3006/health >/dev/null 2>&1; then
+    HAPI_HEALTHY=1
+    break
+  fi
+  echo "Waiting for HAPI to become ready ($attempt/30)"
   sleep 1
 done
-curl -fsS http://127.0.0.1:3006/health >/dev/null
+if [[ "$HAPI_HEALTHY" -ne 1 ]]; then
+  echo "HAPI failed its health check. Inspect: journalctl -u agent-hapi-hub.service -n 100 --no-pager" >&2
+  exit 1
+fi
 systemctl is-active agent-hapi-hub.service nginx \
   agent-hapi-cert-renew.timer
 
