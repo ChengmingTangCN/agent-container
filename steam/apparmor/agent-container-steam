@@ -1,0 +1,12 @@
+# The Ubuntu default user-namespace restriction requires a named profile that
+# explicitly allows creating a user namespace. Keep the profile restricted to
+# the dedicated Steam container through Docker's apparmor security option.
+
+abi <abi/4.0>,
+include <tunables/global>
+
+profile agent-container-steam flags=(unconfined) {
+  userns,
+
+  include if exists <local/agent-container-steam>
+}

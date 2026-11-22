@@ -135,6 +135,28 @@ Existing containers are reused even when those build inputs change. See
 [Upgrade HAPI](docs/operations.md#upgrade-hapi) to update HAPI in place while
 keeping an existing container's installed software and files.
 
+## Steam container
+
+Run the desktop Steam client in a separate container with the current X11
+display, Pulse/PipeWire audio, GPU, and host network:
+
+```bash
+sudo ./steam/install-apparmor-profile.sh
+./steam-container --check
+./steam-container
+```
+
+The launcher maps AMD/Intel `/dev/dri` devices or uses the NVIDIA Container
+Toolkit, forwards only the current display and audio sockets, and stores Steam
+in `~/.agent-container/steam/home`. Host networking is the default so logins,
+LAN discovery, Remote Play, and localhost proxies work. The Steam container does
+not receive the Docker socket or `--privileged` access.
+
+Ubuntu's unprivileged user-namespace restriction can block Steam Runtime's
+nested `bubblewrap` sandbox. The AppArmor installer adds a named profile used
+only by this container. See [Steam container](docs/steam.md) for first-start,
+GPU/audio, Steam libraries, troubleshooting, and reset details.
+
 ## State
 
 | Data | Location |
