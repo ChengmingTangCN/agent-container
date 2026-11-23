@@ -73,6 +73,9 @@ This covers project files (including ignored files and Git history), mounted
 credentials and conversations, shared configuration, forwarded environment
 variables, and data available through reachable services. All agents in a
 container share a user and can read each other's mounted state.
+With `--steam`, the container also receives the current display, audio socket
+and GPU devices, which every agent in it can use. Steam installed inside the
+container and its data live in the writable layer and are exposed to agents.
 
 Keep private information outside this exposed set; use narrow project directories
 and synthetic test data. Ignore files, agent instructions, and read-only mounts
@@ -113,6 +116,8 @@ not authenticate an agent or verify provider quota/model access.
 | `agent-container <project>` | Interactive Bash; removes container on exit |
 | `agent-container --persistent <project>` | Reuses interactive Bash container |
 | `agent-container --hapi <project>` | Background HAPI Runner; first-run Hub setup and readiness check |
+| `agent-container --steam <project>` | Adds host GPU/audio/display access; install Steam yourself |
+| `agent-container --hapi --steam <project>` | HAPI Runner with host GPU/audio/display access |
 | `agent-container --rebuild <project>` | Rebuilds without cache, then replaces the project's container; combine with `--hapi` for a Runner |
 | `--env-file <file>` | Explicit runtime environment for a new container; repeat for multiple files |
 
@@ -135,27 +140,43 @@ Existing containers are reused even when those build inputs change. See
 [Upgrade HAPI](docs/operations.md#upgrade-hapi) to update HAPI in place while
 keeping an existing container's installed software and files.
 
-## Steam container
+## Steam desktop access
 
-Run the desktop Steam client in a separate container with the current X11
-display, Pulse/PipeWire audio, GPU, and host network:
+"agent-container --steam" only adds host GPU, audio and display access to the
+base HAPI/Codex container; install Steam and its dependencies yourself.
+
+To enable host access:
 
 ```bash
 sudo ./steam/install-apparmor-profile.sh
-./steam-container --check
-./steam-container
+agent-container --hapi --steam ~/dev/myproj
+docker exec -it <container> bash
 ```
 
-The launcher maps AMD/Intel `/dev/dri` devices or uses the NVIDIA Container
-Toolkit, forwards only the current display and audio sockets, and stores Steam
-in `~/.agent-container/steam/home`. Host networking is the default so logins,
-LAN discovery, Remote Play, and localhost proxies work. The Steam container does
-not receive the Docker socket or `--privileged` access.
+Inside that shell, install the `.deb` and run Steam normally:
+
+```bash
+sudo dpkg --add-architecture i386
+sudo apt update
+sudo apt install ./steam.deb
+steam
+```
+
+The image is unchanged. `--steam` maps AMD/Intel `/dev/dri` devices or uses the
+NVIDIA Container Toolkit, forwards only the current X11 and audio sockets, and
+adds `--init` plus a 1 GiB shared-memory segment. Host networking is the default
+so logins, LAN discovery, Remote Play, and localhost proxies work. The container
+does not receive the Docker socket or `--privileged` access.
+
+Steam and its data live in the container's writable layer: stop/start preserves
+them, while removing or rebuilding the container loses them. Use `--persistent`
+for an interactive install; `--hapi` containers already persist across restarts.
 
 Ubuntu's unprivileged user-namespace restriction can block Steam Runtime's
 nested `bubblewrap` sandbox. The AppArmor installer adds a named profile used
-only by this container. See [Steam container](docs/steam.md) for first-start,
-GPU/audio, Steam libraries, troubleshooting, and reset details.
+only by containers started with `--steam`. See
+[Steam desktop access](docs/steam.md) for first-start, GPU/audio, and
+troubleshooting.
 
 ## State
 

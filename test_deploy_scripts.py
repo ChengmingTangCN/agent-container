@@ -15,7 +15,6 @@ class DeploymentScriptTests(unittest.TestCase):
     def test_shell_scripts_parse_and_obsolete_ingress_is_absent(self):
         scripts = [
             REPO / "agent-container",
-            REPO / "steam-container",
             REPO / "hapi-release.env",
             *sorted((REPO / "deploy").glob("*.sh")),
             *sorted((REPO / "steam").glob("*.sh")),

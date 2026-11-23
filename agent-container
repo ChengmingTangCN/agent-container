@@ -13,6 +13,7 @@ Start a project container locally. Use the upstream HAPI PWA for agent sessions.
 Options:
   --hapi        Start a persistent HAPI Runner container in the background
   --persistent  Keep and reuse an interactive container after exit
+  --steam       Add host GPU/audio/display access for Steam
   --rebuild     Rebuild the image and replace this project's container
   --env-file F  Pass a Docker env file to the container (provider keys, etc.)
   -h, --help    Show this help
@@ -22,6 +23,7 @@ USAGE
 PERSISTENT=0
 REBUILD=0
 HAPI_RUNNER=0
+STEAM=0
 ENV_ARGS=()
 PROJECT_ARG=""
 while [[ $# -gt 0 ]]; do
@@ -29,6 +31,7 @@ while [[ $# -gt 0 ]]; do
     --persistent) PERSISTENT=1; shift ;;
     --rebuild) REBUILD=1; shift ;;
     --hapi) HAPI_RUNNER=1; PERSISTENT=1; shift ;;
+    --steam) STEAM=1; shift ;;
     --env-file)
       [[ $# -ge 2 && -f "$2" && -r "$2" ]] || { echo "--env-file requires a readable file" >&2; exit 2; }
       ENV_ARGS+=(--env-file "$(realpath -e -- "$2")")
@@ -103,6 +106,25 @@ STATE_MOUNTS=(
 )
 MODE="shell"
 [[ "$HAPI_RUNNER" -eq 0 ]] || MODE="hapi"
+[[ "$STEAM" -eq 0 ]] || MODE="${MODE}-steam"
+
+STEAM_APPARMOR_PROFILE="${STEAM_CONTAINER_APPARMOR_PROFILE:-agent-container-steam}"
+STEAM_SECURITY_ARGS=()
+if [[ "$STEAM" -eq 1 && "$STEAM_APPARMOR_PROFILE" != "none" ]]; then
+  APPARMOR_ENABLED="$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null || true)"
+  USERNS_RESTRICTED="$(
+    cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || true
+  )"
+  if [[ "$APPARMOR_ENABLED" == "Y" && "$USERNS_RESTRICTED" == "1" ]]; then
+    STEAM_PROFILE_FILE="/etc/apparmor.d/${STEAM_APPARMOR_PROFILE}"
+    if [[ ! -f "$STEAM_PROFILE_FILE" ]]; then
+      echo "Steam requires the host AppArmor profile: ${STEAM_APPARMOR_PROFILE}" >&2
+      echo "Install it once with: sudo $SCRIPT_DIR/steam/install-apparmor-profile.sh" >&2
+      exit 1
+    fi
+    STEAM_SECURITY_ARGS+=(--security-opt "apparmor=${STEAM_APPARMOR_PROFILE}")
+  fi
+fi
 
 clear_runner_process_state() {
   # The previous container's PIDs cannot identify processes in a fresh start.
@@ -122,6 +144,9 @@ check_runner() {
   echo "  Codex: codex login --device-auth (or codex login); check: codex login status"
   echo "  API key for Codex: printenv OPENAI_API_KEY | codex login --with-api-key"
   echo "  Pi: pi, then /login and /model; OpenCode: opencode auth login"
+  if [[ "$STEAM" -eq 1 ]]; then
+    echo "  Steam: docker exec -it $CONTAINER_NAME bash (install Steam inside the container)"
+  fi
   echo "Hub readiness does not verify provider credentials, quota, or model access. See docs/agents.md."
 }
 
@@ -256,6 +281,84 @@ RUNTIME_ARGS=(
   -v "$PROJECT:$WORKDIR_IN_CONTAINER"
   -w "$WORKDIR_IN_CONTAINER"
 )
+
+add_steam_runtime_args() {
+  RUNTIME_ARGS+=(--init --shm-size=1g)
+  if [[ ${#STEAM_SECURITY_ARGS[@]} -gt 0 ]]; then
+    RUNTIME_ARGS+=("${STEAM_SECURITY_ARGS[@]}")
+  fi
+
+  local DRI_FOUND=0
+  if [[ -d /dev/dri ]] && find /dev/dri -maxdepth 1 -type c -print -quit | grep -q .; then
+    RUNTIME_ARGS+=(--device /dev/dri)
+    DRI_FOUND=1
+    while IFS= read -r DRI_GID; do
+      [[ -n "$DRI_GID" ]] || continue
+      RUNTIME_ARGS+=(--group-add "$DRI_GID")
+    done < <(find /dev/dri -maxdepth 1 -type c -printf '%G\n' | sort -nu)
+  fi
+
+  local NVIDIA_FOUND=0
+  if [[ -c /dev/nvidia0 ]] && command -v nvidia-smi >/dev/null 2>&1; then
+    NVIDIA_FOUND=1
+    RUNTIME_ARGS+=(
+      --gpus all
+      -e NVIDIA_DRIVER_CAPABILITIES=all
+      -e NVIDIA_VISIBLE_DEVICES=all
+    )
+  fi
+
+  if [[ "$DRI_FOUND" -eq 0 && "$NVIDIA_FOUND" -eq 0 ]]; then
+    echo "Steam: no host GPU detected; Steam will use software rendering." >&2
+  fi
+
+  if [[ -n "${DISPLAY:-}" ]]; then
+    local DISPLAY_NUMBER X_SOCKET
+    DISPLAY_NUMBER="${DISPLAY#*:}"
+    DISPLAY_NUMBER="${DISPLAY_NUMBER%%.*}"
+    X_SOCKET="/tmp/.X11-unix/X${DISPLAY_NUMBER}"
+    RUNTIME_ARGS+=(-e "DISPLAY=$DISPLAY")
+    if [[ -S "$X_SOCKET" ]]; then
+      RUNTIME_ARGS+=(-v "$X_SOCKET:$X_SOCKET:ro")
+    elif [[ -d /tmp/.X11-unix ]]; then
+      RUNTIME_ARGS+=(-v "/tmp/.X11-unix:/tmp/.X11-unix:ro")
+    else
+      echo "Steam: X11 socket directory is missing; the desktop window may not work." >&2
+    fi
+  else
+    echo "Steam: DISPLAY is unset; the desktop window will not be available." >&2
+  fi
+
+  local XAUTHORITY_FILE
+  XAUTHORITY_FILE="${XAUTHORITY:-$HOME/.Xauthority}"
+  if [[ -f "$XAUTHORITY_FILE" ]]; then
+    RUNTIME_ARGS+=(
+      -v "$XAUTHORITY_FILE:/run/steam/xauthority:ro"
+      -e "XAUTHORITY=/run/steam/xauthority"
+    )
+  fi
+
+  local RUNTIME_DIR PULSE_SOCKET PULSE_COOKIE_FILE
+  RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$UID_HOST}"
+  PULSE_SOCKET="$RUNTIME_DIR/pulse/native"
+  if [[ -S "$PULSE_SOCKET" ]]; then
+    RUNTIME_ARGS+=(
+      -v "$PULSE_SOCKET:/run/steam/pulse-native:ro"
+      -e "PULSE_SERVER=unix:/run/steam/pulse-native"
+    )
+  else
+    echo "Steam: no Pulse/PipeWire socket found; audio may be unavailable." >&2
+  fi
+  PULSE_COOKIE_FILE="${PULSE_COOKIE:-$HOME/.config/pulse/cookie}"
+  if [[ -f "$PULSE_COOKIE_FILE" ]]; then
+    RUNTIME_ARGS+=(
+      -v "$PULSE_COOKIE_FILE:/run/steam/pulse-cookie:ro"
+      -e "PULSE_COOKIE=/run/steam/pulse-cookie"
+    )
+  fi
+}
+
+[[ "$STEAM" -eq 0 ]] || add_steam_runtime_args
 [[ -z "${HAPI_API_URL:-}" ]] || RUNTIME_ARGS+=(-e "HAPI_API_URL=$HAPI_API_URL")
 for SHARED_CONFIG in .tmux.conf .gitconfig; do
   if [[ -f "$HOME/$SHARED_CONFIG" ]]; then
@@ -278,5 +381,8 @@ if [[ "$HAPI_RUNNER" -eq 1 ]]; then
 else
   REMOVE_ARGS=(--rm)
   [[ "$PERSISTENT" -eq 0 ]] || REMOVE_ARGS=()
+  if [[ "$STEAM" -eq 1 ]]; then
+    echo "Steam: host GPU/audio/display access is enabled; install Steam inside the container."
+  fi
   docker run "${REMOVE_ARGS[@]}" -it "${RUNTIME_ARGS[@]}" "$IMAGE"
 fi

@@ -1,8 +1,9 @@
-# Steam container
+# Steam desktop access
 
-`steam-container` runs the desktop Steam client in its own container while
-using the current X11 desktop, audio server, GPU, and host network. It does not
-mix Steam state with a project's agent home or mount the Docker socket.
+`agent-container --steam` adds host GPU, audio and X11 display access to a
+normal project container. It does not install Steam. Install the Steam `.deb`
+yourself inside the container; HAPI, Codex, Pi and OpenCode continue to run in
+the same container.
 
 This is headful: the Steam window opens on the desktop where the launcher runs.
 It is intended for a local workstation. For browser or remote-streaming gaming,
@@ -16,47 +17,51 @@ virtual-display and streaming environments.
 - An x86_64 Linux host with Docker and a working X11 or XWayland display.
 - An audio server reachable through a PipeWire-Pulse or PulseAudio socket.
 - AMD/Intel `/dev/dri` devices, or NVIDIA with the NVIDIA Container Toolkit.
+- A Steam `.deb` and any package dependencies you choose to install.
 - On Ubuntu systems that restrict unprivileged user namespaces with AppArmor,
   the named profile described below.
 
-The image uses Ubuntu 24.04 and preserves the USTC APT mirror for fast package
-installation in mainland China. If that mirror is unavailable, the build falls
-back to the official Ubuntu archive.
+The base agent image uses Ubuntu 24.04. It does not ship Steam, Mesa/Vulkan
+userspace drivers or Steam's 32-bit dependencies; install what your `.deb` and
+GPU require with `apt`.
 
 ## Start
 
-Install the host AppArmor profile once. The installer only adds a named profile;
-it does not change the kernel setting or other application profiles.
+Install the host AppArmor profile once if Ubuntu restricts unprivileged user
+namespaces. The installer only adds a named profile; it does not change the
+kernel setting or other application profiles.
 
 ```bash
 sudo ./steam/install-apparmor-profile.sh
 ```
 
-Verify host display, audio, Vulkan, user namespaces, and Steam's nested
-bubblewrap sandbox:
+Start a persistent project container with host access:
 
 ```bash
-./steam-container --check
+agent-container --hapi --steam ~/dev/myproj
+docker exec -it <container> bash
 ```
 
-When the launcher detects a host GPU device, the preflight also requires Vulkan
-to expose a hardware device rather than accepting `llvmpipe` software rendering
-alone.
-
-Start Steam and sign in:
+Install Steam and start it from that shell:
 
 ```bash
-./steam-container
+sudo dpkg --add-architecture i386
+sudo apt update
+sudo apt install ./steam.deb
+steam
 ```
 
-The first launch accepts the distribution's proprietary-software prompt and
-downloads the current Steam client and runtime. This is normally more than
-1 GB and is kept in the persistent state directory, so later starts reuse it.
+For interactive use, keep the container after exit:
 
-The default container name is `agent-steam-<uid>`. Pressing Ctrl-C stops Steam
-and the container; the next command reuses the downloaded state. A stopped or
-older container is recreated with the current runtime arguments, while the
-persistent home remains mounted.
+```bash
+agent-container --steam --persistent ~/dev/myproj
+```
+
+The first Steam launch normally downloads more than 1 GB. Steam and its data
+live in the container's writable layer: stop/start preserves them, while
+removing or rebuilding the container loses them. A container created without
+`--steam` cannot gain the extra mounts in place; recreate it before installing
+Steam.
 
 ## Host access
 
@@ -72,9 +77,9 @@ The launcher is deliberately narrower than `--privileged`:
 | Pulse cookie | Read-only bind mount | Pulse authentication |
 | Network | Host network namespace by default | Steam login, LAN discovery, Remote Play, localhost proxies |
 
-Steam receives a private D-Bus session, a 1 GiB shared-memory segment, and a
-read-only X socket. The Docker socket, full host runtime directory, host D-Bus,
-and `--privileged` are not mounted or enabled.
+The container also receives `--init` and a 1 GiB shared-memory segment. The
+Docker socket, full host runtime directory, host D-Bus, and `--privileged` are
+not mounted or enabled.
 
 The container shares the Linux kernel and therefore observes host CPU, memory,
 kernel, and mapped GPU details. With no Docker CPU or memory limit, Steam's
@@ -102,77 +107,29 @@ bwrap: setting up uid map: Permission denied
 Ubuntu's AppArmor policy language exposes a `userns` permission for this case.
 `steam/apparmor/agent-container-steam` is a named unconfined Docker profile with
 that permission and is selected explicitly with Docker's `apparmor=` security
-option. The Steam container therefore does not need a
+option. The container therefore does not need a
 `kernel.apparmor_restrict_unprivileged_userns=0` change that would affect the
 whole host. The profile does not add filesystem or device confinement beyond
 the container's mounts; treating it otherwise would overstate what AppArmor is
 doing here.
 
-Docker's default seccomp policy is also relaxed for this container because the
-Steam Runtime uses a nested sandbox. The launcher compensates by omitting
+Docker's default seccomp policy is relaxed for this container because the Steam
+Runtime uses a nested sandbox. The launcher compensates by omitting
 `--privileged` and Docker control sockets.
 
 If AppArmor is disabled or this user-namespace restriction is not enabled, the
 installer leaves the host unchanged and the launcher does not require the
 profile.
 
-## Options
-
-```text
---check                  Run display/audio/GPU/sandbox checks only.
---skip-check             Skip the runtime preflight.
---rebuild                Rebuild without cache and replace the container.
---library DIR            Mount another Steam library; may be repeated.
---host-network           Use host networking (default).
---bridge-network         Use Docker bridge networking.
---apparmor-profile NAME  Select another installed Docker profile.
---no-apparmor-profile    Use Docker's default AppArmor profile.
-```
-
-Host-local proxies such as `http://127.0.0.1:7890` work with host networking.
-In bridge mode they are omitted because that address denotes the container
-itself. Remote proxies remain available in bridge mode.
-
-To put a Steam library on a specific host disk:
-
-```bash
-./steam-container --library /path/to/SteamLibrary
-```
-
-Inside Steam, add `/home/dev/SteamLibrary-<name>-<hash>` as a library folder.
-
-## State and removal
-
-Steam credentials, client updates, Proton prefixes, and the default library
-live under:
-
-```text
-${AGENT_CONTAINER_DATA_DIR:-$HOME/.agent-container}/steam/home
-```
-
-Stop and remove the container without deleting this state:
-
-```bash
-docker stop agent-steam-"$(id -u)"
-docker rm agent-steam-"$(id -u)"
-```
-
-Delete the state directory only when a full Steam reset is intended.
-
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| `Required AppArmor profile is not installed` | Run `sudo ./steam/install-apparmor-profile.sh` |
-| `userns` or `bwrap` fails in `--check` | Confirm AppArmor's enabled state, the selected profile, and `apparmor_parser -Q -K` syntax |
-| `display` fails | Run the launcher from the desktop session; confirm `DISPLAY`, `XAUTHORITY`, and `/tmp/.X11-unix/X<n>` |
-| `audio` fails | Confirm `pactl info` works on the host and `$XDG_RUNTIME_DIR/pulse/native` exists |
-| `vulkan` fails | Confirm the host uses the same GPU driver stack and the render/video GIDs are accessible |
-| NVIDIA reports no GPU | Install and test the NVIDIA Container Toolkit with `docker run --rm --gpus all ... nvidia-smi` |
-| Steam cannot connect through a localhost proxy | Keep host networking, or expose an HTTP proxy on an address reachable from a bridge container |
+| `Steam requires the host AppArmor profile` | Run `sudo ./steam/install-apparmor-profile.sh` |
+| `userns` or `bwrap` fails | Confirm AppArmor is enabled, the profile is installed, and the container was recreated with `--steam` |
+| Steam window does not appear | Start the container from the desktop session; confirm `DISPLAY`, `XAUTHORITY`, and `/tmp/.X11-unix/X<n>` |
+| Audio fails | Confirm `pactl info` works on the host and `$XDG_RUNTIME_DIR/pulse/native` exists |
+| Vulkan/GPU fails | Confirm `/dev/dri` or the NVIDIA Container Toolkit is available; install the matching Mesa/Vulkan userspace packages in the container |
+| `steam` command not found | Install the `.deb` and use the path it installed; install `dbus-x11` and missing dependencies with `apt` |
+| `steam.deb` dependency errors | Run `sudo dpkg --add-architecture i386`, `sudo apt update`, then retry `sudo apt install ./steam.deb` |
 | Portal, accessibility, PipeWire, or FUSE warnings appear | These services are optional for the Steam login window unless the corresponding in-game feature needs them |
-
-The `xdg-desktop-portal` FUSE warning observed in a minimal container does not
-prevent Steam login. A game that explicitly needs desktop portals or FUSE
-document access needs additional, narrowly scoped mounts or a purpose-built
-remote-gaming image.

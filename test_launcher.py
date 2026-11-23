@@ -4,12 +4,25 @@ import hashlib
 import json
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
+
+
+def userns_restricted():
+    enabled = Path('/sys/module/apparmor/parameters/enabled')
+    restriction = Path('/proc/sys/kernel/apparmor_restrict_unprivileged_userns')
+    return (
+        enabled.exists()
+        and enabled.read_text().strip() == 'Y'
+        and restriction.exists()
+        and restriction.read_text().strip() == '1'
+    )
+
 
 DOCKER_STUB = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -64,7 +77,11 @@ class LauncherTests(unittest.TestCase):
                         PATH=str(bindir) + os.pathsep + self.env['PATH'],
                         LAUNCHER_TEST_CALLS=str(self.calls_path),
                         LAUNCHER_TEST_CONFIG=str(self.config_path))
-        self.env.pop('HAPI_API_URL', None)
+        for name in (
+            'DISPLAY', 'HAPI_API_URL', 'PULSE_COOKIE', 'PULSE_SERVER',
+            'STEAM_CONTAINER_APPARMOR_PROFILE', 'XAUTHORITY', 'XDG_RUNTIME_DIR',
+        ):
+            self.env.pop(name, None)
         self.launcher = REPO / 'agent-container'
 
     def configure(self, **values):
@@ -511,6 +528,100 @@ class LauncherTests(unittest.TestCase):
             self.assertIn(f'{name}=lowercase-value', build)
             self.assertIn(f'{name}=lowercase-value', self.run_args())
             self.assertIn(f'{name.lower()}=lowercase-value', self.run_args())
+
+    def test_steam_adds_host_access_without_changing_the_image(self):
+        self.env['STEAM_CONTAINER_APPARMOR_PROFILE'] = 'none'
+        result = self.launch('--steam')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(call[0] == 'build' for call in self.calls()))
+        args = self.run_args()
+        self.assertIn('agent-container.mode=shell-steam', args)
+        self.assertIn('--init', args)
+        self.assertIn('--shm-size=1g', args)
+        self.assertNotIn('--privileged', args)
+        mounts = [args[index + 1] for index, arg in enumerate(args) if arg == '-v']
+        self.assertFalse(any('/steam/' in mount for mount in mounts))
+        self.assertFalse(any('docker.sock' in mount for mount in mounts))
+        image = args[-1]
+        self.assertNotIn('-steam', image)
+
+    def test_hapi_runner_can_enable_steam_without_losing_workspace(self):
+        self.login_fixture()
+        self.env['STEAM_CONTAINER_APPARMOR_PROFILE'] = 'none'
+        result = self.launch('--hapi', '--steam')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.run_args()
+        self.assertIn('-d', args)
+        self.assertIn('agent-container.mode=hapi-steam', args)
+        self.assertFalse(any('/steam/' in arg for arg in args if ':/' in arg))
+        self.assertEqual(
+            args[-5:],
+            ['hapi', 'runner', 'start-sync', '--workspace-root', '/work/a project'],
+        )
+        self.assertIn('Steam: docker exec -it', result.stdout)
+
+    def test_steam_forwards_display_audio_and_xauthority(self):
+        self.env['STEAM_CONTAINER_APPARMOR_PROFILE'] = 'none'
+        runtime = self.base / 'runtime'
+        pulse = runtime / 'pulse'
+        pulse.mkdir(parents=True)
+        listener = socket.socket(socket.AF_UNIX)
+        listener.bind(str(pulse / 'native'))
+        listener.close()
+        self.addCleanup((pulse / 'native').unlink, missing_ok=True)
+        self.env['XDG_RUNTIME_DIR'] = str(runtime)
+
+        xauthority = self.home / '.Xauthority'
+        xauthority.write_bytes(b'')
+        self.env['XAUTHORITY'] = str(xauthority)
+        cookie = self.home / 'pulse-cookie'
+        cookie.write_bytes(b'')
+        self.env['PULSE_COOKIE'] = str(cookie)
+
+        x11_dir = Path('/tmp/.X11-unix')
+        display = f':{20000 + os.getpid() % 20000}'
+        if x11_dir.is_dir():
+            self.env['DISPLAY'] = display
+
+        result = self.launch('--steam')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.run_args()
+        mounts = [args[index + 1] for index, arg in enumerate(args) if arg == '-v']
+        self.assertIn(
+            f'{pulse / "native"}:/run/steam/pulse-native:ro', mounts
+        )
+        self.assertIn(
+            f'{cookie}:/run/steam/pulse-cookie:ro', mounts
+        )
+        self.assertIn(
+            f'{xauthority}:/run/steam/xauthority:ro', mounts
+        )
+        self.assertIn('PULSE_SERVER=unix:/run/steam/pulse-native', args)
+        self.assertIn('PULSE_COOKIE=/run/steam/pulse-cookie', args)
+        self.assertIn('XAUTHORITY=/run/steam/xauthority', args)
+        if x11_dir.is_dir():
+            self.assertIn(f'DISPLAY={display}', args)
+            self.assertIn('/tmp/.X11-unix:/tmp/.X11-unix:ro', mounts)
+
+    def test_steam_cannot_be_added_to_an_existing_non_steam_container(self):
+        self.env['STEAM_CONTAINER_APPARMOR_PROFILE'] = 'none'
+        self.configure(exists=True, mode='shell', running=True)
+        result = self.launch('--steam')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('shell mode', result.stderr)
+        self.assertFalse(any(call[0] in ('build', 'rm', 'run') for call in self.calls()))
+
+    @unittest.skipUnless(
+        userns_restricted(), 'host does not restrict unprivileged user namespaces'
+    )
+    def test_steam_requires_the_scoped_apparmor_profile(self):
+        self.env['STEAM_CONTAINER_APPARMOR_PROFILE'] = (
+            f'agent-container-steam-missing-{os.getpid()}'
+        )
+        result = self.launch('--steam')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('AppArmor profile', result.stderr)
+        self.assertFalse(self.calls_path.exists())
 
 
 if __name__ == '__main__':
